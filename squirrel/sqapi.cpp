@@ -143,6 +143,13 @@ void sq_enabledebuginfo(HSQUIRRELVM v, SQBool enable)
     _ss(v)->_debuginfo = enable?true:false;
 }
 
+// Whether the compiler emits debug info (sq_enabledebuginfo): it changes the bytecode
+// a compile produces, so a compile cache must know it.
+SQBool sq_getdebuginfo(HSQUIRRELVM v)
+{
+    return _ss(v)->_debuginfo ? SQTrue : SQFalse;
+}
+
 void sq_notifyallexceptions(HSQUIRRELVM v, SQBool enable)
 {
     _ss(v)->_notifyallexceptions = enable?true:false;
