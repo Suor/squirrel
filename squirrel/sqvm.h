@@ -102,6 +102,8 @@ public:
     _INLINE bool ARITH_OP(SQUnsignedInteger op,SQObjectPtr &trg,const SQObjectPtr &o1,const SQObjectPtr &o2);
     _INLINE bool BW_OP(SQUnsignedInteger op,SQObjectPtr &trg,const SQObjectPtr &o1,const SQObjectPtr &o2);
     _INLINE bool NEG_OP(SQObjectPtr &trg,const SQObjectPtr &o1);
+    // Whether the running function computes floats in single precision (_f32math).
+    bool F32Math() const;
     _INLINE bool CMP_OP(CmpOP op, const SQObjectPtr &o1,const SQObjectPtr &o2,SQObjectPtr &res);
     bool CLOSURE_OP(SQObjectPtr &target, SQFunctionProto *func, SQInteger boundtarget);
     bool CLASS_OP(SQObjectPtr &target,SQInteger base,SQInteger attrs);

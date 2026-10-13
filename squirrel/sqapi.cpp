@@ -447,6 +447,33 @@ SQRESULT sq_setparamscheck(HSQUIRRELVM v,SQInteger nparamscheck,const SQChar *ty
     return SQ_OK;
 }
 
+// Battle Brothers compatibility: mark a closure's function (and every nested
+// function) to compute float arithmetic in single precision, and round its float
+// literals to single precision, reproducing the original 32-bit-float engine.
+static void SetF32Math(SQFunctionProto *f, bool on)
+{
+    f->_f32math = on;
+    if (on) {
+        for (SQInteger i = 0; i < f->_nliterals; i++) {
+            if (sq_type(f->_literals[i]) == OT_FLOAT)
+                f->_literals[i] = (SQFloat)(float)_float(f->_literals[i]);
+        }
+    }
+    for (SQInteger i = 0; i < f->_nfunctions; i++) {
+        if (sq_type(f->_functions[i]) == OT_FUNCPROTO)
+            SetF32Math(_funcproto(f->_functions[i]), on);
+    }
+}
+
+SQRESULT sq_setf32math(HSQUIRRELVM v,SQInteger idx,SQBool on)
+{
+    SQObjectPtr &o = stack_get(v,idx);
+    if(!sq_isclosure(o))
+        return sq_throwerror(v,_SC("the target is not a closure"));
+    SetF32Math(_closure(o)->_function, on ? true : false);
+    return SQ_OK;
+}
+
 SQRESULT sq_bindenv(HSQUIRRELVM v,SQInteger idx)
 {
     SQObjectPtr &o = stack_get(v,idx);

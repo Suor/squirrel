@@ -39,13 +39,23 @@ bool SQVM::BW_OP(SQUnsignedInteger op,SQObjectPtr &trg,const SQObjectPtr &o1,con
     return true;
 }
 
+bool SQVM::F32Math() const
+{
+    return ci && sq_type(ci->_closure) == OT_CLOSURE && _closure(ci->_closure)->_function->_f32math;
+}
+
+// Float op honouring _f32math: single-precision (exactly like the original 32-bit
+// SQFloat engine) inside flagged functions, full SQFloat precision otherwise.
+#define _FLOAT_OP_(op,o1,o2) \
+    (F32Math() ? (SQFloat)((float)tofloat(o1) op (float)tofloat(o2)) : (tofloat(o1) op tofloat(o2)))
+
 #define _ARITH_(op,trg,o1,o2) \
 { \
     SQInteger tmask = sq_type(o1)|sq_type(o2); \
     switch(tmask) { \
         case OT_INTEGER: trg = _integer(o1) op _integer(o2);break; \
         case (OT_FLOAT|OT_INTEGER): \
-        case (OT_FLOAT): trg = tofloat(o1) op tofloat(o2); break;\
+        case (OT_FLOAT): trg = _FLOAT_OP_(op,o1,o2); break;\
         default: _GUARD(ARITH_OP((#op)[0],trg,o1,o2)); break;\
     } \
 }
@@ -56,7 +66,7 @@ bool SQVM::BW_OP(SQUnsignedInteger op,SQObjectPtr &trg,const SQObjectPtr &o1,con
     switch(tmask) { \
         case OT_INTEGER: { SQInteger i2 = _integer(o2); if(i2 == 0) { Raise_Error(err); SQ_THROW(); } trg = _integer(o1) op i2; } break;\
         case (OT_FLOAT|OT_INTEGER): \
-        case (OT_FLOAT): trg = tofloat(o1) op tofloat(o2); break;\
+        case (OT_FLOAT): trg = _FLOAT_OP_(op,o1,o2); break;\
         default: _GUARD(ARITH_OP((#op)[0],trg,o1,o2)); break;\
     } \
 }
@@ -86,7 +96,19 @@ bool SQVM::ARITH_OP(SQUnsignedInteger op,SQObjectPtr &trg,const SQObjectPtr &o1,
         case (OT_FLOAT|OT_INTEGER):
         case (OT_FLOAT):{
             SQFloat res, f1 = tofloat(o1), f2 = tofloat(o2);
-            switch(op) {
+            if (F32Math()) {
+                float g1 = (float)f1, g2 = (float)f2, r;
+                switch(op) {
+                case '+': r = g1 + g2; break;
+                case '-': r = g1 - g2; break;
+                case '/': r = g1 / g2; break;
+                case '*': r = g1 * g2; break;
+                case '%': r = fmodf(g1, g2); break;
+                default: r = 0x0f;
+                }
+                res = (SQFloat)r;
+            }
+            else switch(op) {
             case '+': res = f1 + f2; break;
             case '-': res = f1 - f2; break;
             case '/': res = f1 / f2; break;

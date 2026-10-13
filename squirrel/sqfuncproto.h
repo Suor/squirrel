@@ -124,6 +124,10 @@ public:
     SQObjectPtr _name;
     SQInteger _stacksize;
     bool _bgenerator;
+    // Battle Brothers compatibility: float arithmetic in this function is computed
+    // in single precision (the original engine's SQFloat was 32-bit). Values stay
+    // stored as SQFloat. Set via sq_setf32math, never serialized.
+    bool _f32math;
     SQInteger _varparams;
 
     SQInteger _nlocalvarinfos;
