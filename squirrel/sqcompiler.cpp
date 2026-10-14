@@ -1096,7 +1096,11 @@ public:
         }
         else {
             Statement();
-            if (_lex._prevtoken != _SC('}') && _lex._prevtoken != _SC(';')) OptionalSemicolon();
+            // A statement's own ';' belongs to the if, even after a '}' that ended an
+            // expression (`if (c) a = {}; else ...`), as in Squirrel 3.0, which Battle
+            // Brothers' scripts and mods were written against.
+            if (_token == _SC(';')) Lex();
+            else if (_lex._prevtoken != _SC('}') && _lex._prevtoken != _SC(';')) OptionalSemicolon();
         }
     }
     void IfStatement()
