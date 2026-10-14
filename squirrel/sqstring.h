@@ -2,34 +2,29 @@
 #ifndef _SQSTRING_H_
 #define _SQSTRING_H_
 
+// The original engine's string hash (Squirrel 3.0 in a 32-bit build): it walks forward
+// one character per step, so a string longer than 31 characters hashes only its first
+// l / step characters, in 32 bits. Where a key lands in a table, and so the order a
+// `foreach` visits a table's slots in, follows from it, and scripts depend on that order
+// (Modern Hooks registers the DLCs by iterating ::Const.DLC).
 inline SQHash _hashstr (const SQChar *s, size_t l)
 {
-	SQHash h = (SQHash)l;  /* seed */
-	size_t step = (l >> 5) + 1;  /* if string is too long, don't hash all its chars */
-	size_t l1;
-	for (l1 = l; l1 >= step; l1 -= step)
-		h = h ^ ((h << 5) + (h >> 2) + ((unsigned short)s[l1 - 1]));
-	return h;
+	unsigned int h = (unsigned int)l;  /* seed */
+	size_t step = (l >> 5) | 1;  /* if string is too long, don't hash all its chars */
+	for (; l >= step; l -= step)
+		h = h ^ ((h << 5) + (h >> 2) + (unsigned short)*(s++));
+	return (SQHash)h;
 }
 
+// `_hashstr` of the concatenation of `as` and `bs`.
 inline SQHash _hashstr2(const SQChar* as, size_t al, const SQChar* bs, size_t bl)
 {
-    size_t l = al + bl;
-    SQHash h = (SQHash)l;  /* seed */
-    SQInteger step = (SQInteger)((l >> 5) + 1);  /* if string is too long, don't hash all its chars */
-    SQInteger l1 = (SQInteger)l;
-    for (; l1 >= step; l1 -= step) {
-        SQInteger idx = l1 - 1 - al;
-        if (idx < 0) {
-            break;
-        }
-        h = h ^ ((h << 5) + (h >> 2) + ((unsigned short)bs[idx]));
-    }
-    for (; l1 >= step; l1 -= step) {
-        SQInteger idx = l1 - 1;
-        h = h ^ ((h << 5) + (h >> 2) + ((unsigned short)as[idx]));
-    }
-    return h;
+	size_t l = al + bl;
+	unsigned int h = (unsigned int)l;  /* seed */
+	size_t step = (l >> 5) | 1;
+	for (size_t i = 0; l >= step; l -= step, i++)
+		h = h ^ ((h << 5) + (h >> 2) + (unsigned short)(i < al ? as[i] : bs[i - al]));
+	return (SQHash)h;
 }
 
 struct SQString : public SQRefCounted
