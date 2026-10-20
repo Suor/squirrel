@@ -67,7 +67,7 @@ void sq_censustrack(HSQUIRRELVM v, SQInteger mode)
 static void census_keys(FILE *f, const char *tag, const std::unordered_set<SQRawObjectVal> &keys, SQTable *t);
 static std::unordered_set<SQRawObjectVal> *census_strings;
 
-static void census_value(FILE *f, const SQObjectPtr &o);
+static void census_value(FILE *f, const SQObject &o);
 static void *census_env(SQWeakRef *env);
 
 struct SQCensus
@@ -93,7 +93,7 @@ struct SQCensus
             SQTable::_HashNode &n = t->_nodes[i];
             if (sq_type(n.key) == OT_NULL) continue;
             fputs("s ", f);
-            census_value(f, n.key);
+            census_value(f, n.key.Obj());
             fputc(' ', f);
             census_value(f, n.val);
             fputc('\n', f);
@@ -130,7 +130,7 @@ static void census_escape(FILE *f, const SQChar *s, SQInteger len)
     if (len == 0) fputs("%", f);
 }
 
-static void census_value(FILE *f, const SQObjectPtr &o)
+static void census_value(FILE *f, const SQObject &o)
 {
     switch (sq_type(o)) {
     case OT_NULL: fputs("n", f); break;

@@ -48,13 +48,47 @@ struct SQTable : public SQDelegable
 {
     friend struct SQCensus;
 private:
+    // A node's key, with the chain's next node packed in beside it: a 64-bit SQObject is a
+    // 4-byte type and an 8-byte value, so a separate next pointer would pad the node from
+    // 32 bytes to 40. `_next` is the next node's index plus one (0: the chain ends here).
+    // Assigning or clearing the key leaves `_next` alone.
+    struct _HashKey
+    {
+        SQObjectValue _unVal;
+        SQObjectType _type;
+        unsigned int _next;
+        _HashKey() { _unVal.raw = (SQRawObjectVal)NULL; _type = OT_NULL; _next = 0; }
+        ~_HashKey() { __Release(_type, _unVal); }
+        SQObject Obj() const { SQObject o; o._type = _type; o._unVal = _unVal; return o; }
+        void Set(const SQObject &o)
+        {
+            SQObjectType tOldType = _type;
+            SQObjectValue unOldVal = _unVal;
+            _unVal = o._unVal;
+            _type = o._type;
+            __AddRef(_type, _unVal);
+            __Release(tOldType, unOldVal);
+        }
+        void Null()
+        {
+            SQObjectType tOldType = _type;
+            SQObjectValue unOldVal = _unVal;
+            _type = OT_NULL;
+            _unVal.raw = (SQRawObjectVal)NULL;
+            __Release(tOldType, unOldVal);
+        }
+    private:
+        _HashKey(const _HashKey &);
+        _HashKey &operator=(const _HashKey &);
+    };
     struct _HashNode
     {
-        _HashNode() { next = NULL; }
         SQObjectPtr val;
-        SQObjectPtr key;
-        _HashNode *next;
+        _HashKey key;
     };
+    // The node after `n` in its chain, in the node array `base` (NULL at the chain's end).
+    static inline _HashNode *_NextOf(_HashNode *base, const _HashNode *n) { return n->key._next ? base + (n->key._next - 1) : NULL; }
+    static inline void _SetNext(_HashNode *base, _HashNode *n, const _HashNode *next) { n->key._next = next ? (unsigned int)(next - base) + 1 : 0; }
     _HashNode *_firstfree;
     _HashNode *_nodes;
     SQInteger _numofnodes;
@@ -74,7 +108,7 @@ private:
     void Rehash(bool force);
     SQTable(SQSharedState *ss, SQInteger nInitialSize);
     void _ClearNodes();
-    bool _NewSlot(const SQObjectPtr &key,const SQObjectPtr &val);
+    bool _NewSlot(const SQObject &key,const SQObjectPtr &val);
     bool _LazyGet(const SQObjectPtr &key,SQObjectPtr &val);
     void _DetachVersion();
     void _ReleaseLazy();
@@ -112,14 +146,14 @@ public:
     void Mark(SQCollectable **chain);
     SQObjectType GetType() {return OT_TABLE;}
 #endif
-    inline _HashNode *_Get(const SQObjectPtr &key,SQHash hash)
+    inline _HashNode *_Get(const SQObject &key,SQHash hash)
     {
         _HashNode *n = &_nodes[hash];
         do{
             if(_rawval(n->key) == _rawval(key) && sq_type(n->key) == sq_type(key)){
                 return n;
             }
-        }while((n = n->next));
+        }while((n = _NextOf(_nodes, n)));
         return NULL;
     }
     //for compiler use
@@ -133,7 +167,7 @@ public:
                 res = n;
                 break;
             }
-        }while((n = n->next));
+        }while((n = _NextOf(_nodes, n)));
         if (res) {
             val = _realval(res->val);
             return true;

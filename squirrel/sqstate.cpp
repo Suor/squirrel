@@ -223,7 +223,7 @@ SQInteger SQSharedState::GetMetaMethodIdxByName(const SQObjectPtr &name)
 
 #ifndef NO_GARBAGE_COLLECTOR
 
-void SQSharedState::MarkObject(SQObjectPtr &o,SQCollectable **chain)
+void SQSharedState::MarkObject(const SQObject &o,SQCollectable **chain)
 {
     switch(sq_type(o)){
     case OT_TABLE:_table(o)->Mark(chain);break;

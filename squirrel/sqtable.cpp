@@ -9,6 +9,10 @@ see copyright notice in squirrel.h
 #include "sqclass.h"
 #include "sqcensus.h"
 
+#ifdef _SQ64
+static_assert(sizeof(SQObject) == 16, "a 64-bit object is a 4-byte type and an 8-byte value");
+#endif
+
 SQTable::SQTable(SQSharedState *ss,SQInteger nInitialSize)
 {
     SQInteger pow2size=MINPOWER2;
@@ -41,11 +45,15 @@ void SQTable::Remove(const SQObjectPtr &key)
 
 void SQTable::AllocNodes(SQInteger nSize)
 {
+#ifdef _SQ64
+    static_assert(sizeof(_HashNode) == 32, "a node packs its next index beside its key");
+#endif
+    // A next index is 32 bits (see _HashKey): 4G nodes, 128 GB of them.
+    assert(nSize <= 0xFFFFFFFF);
     _HashNode *nodes=(_HashNode *)SQ_MALLOC(sizeof(_HashNode)*nSize);
     for(SQInteger i=0;i<nSize;i++){
         _HashNode &n = nodes[i];
         new (&n) _HashNode;
-        n.next=NULL;
     }
     _numofnodes=nSize;
     _nodes=nodes;
@@ -74,7 +82,7 @@ void SQTable::Rehash(bool force)
     for (SQInteger i=0; i<oldsize; i++) {
         _HashNode *old = nold+i;
         if (sq_type(old->key) != OT_NULL)
-            _NewSlot(old->key,old->val);
+            _NewSlot(old->key.Obj(),old->val);
     }
     sq_census_on = census;
     for(SQInteger k=0;k<oldsize;k++)
@@ -89,34 +97,11 @@ SQTable *SQTable::Clone()
     if (census) sq_census_clone(this);
     sq_census_on = 0;
     SQTable *nt=Create(_opt_ss(this),_numofnodes);
-#ifdef _FAST_CLONE
-    _HashNode *basesrc = _nodes;
-    _HashNode *basedst = nt->_nodes;
-    _HashNode *src = _nodes;
-    _HashNode *dst = nt->_nodes;
-    SQInteger n = 0;
-    for(n = 0; n < _numofnodes; n++) {
-        dst->key = src->key;
-        dst->val = src->val;
-        if(src->next) {
-            assert(src->next > basesrc);
-            dst->next = basedst + (src->next - basesrc);
-            assert(dst != dst->next);
-        }
-        dst++;
-        src++;
-    }
-    assert(_firstfree > basesrc);
-    assert(_firstfree != NULL);
-    nt->_firstfree = basedst + (_firstfree - basesrc);
-    nt->_usednodes = _usednodes;
-#else
     SQInteger ridx=0;
     SQObjectPtr key,val;
     while((ridx=Next(true,ridx,key,val))!=-1){
         nt->NewSlot(key,val);
     }
-#endif
     nt->SetDelegate(_delegate);
     sq_census_on = census;
     return nt;
@@ -159,7 +144,7 @@ bool SQTable::NewSlot(const SQObjectPtr &key,const SQObjectPtr &val)
     return _NewSlot(key, val);
 }
 
-bool SQTable::_NewSlot(const SQObjectPtr &key,const SQObjectPtr &val)
+bool SQTable::_NewSlot(const SQObject &key,const SQObjectPtr &val)
 {
     SQHash h = HashObj(key) & (_numofnodes - 1);
     _HashNode *n = _Get(key, h);
@@ -176,34 +161,34 @@ bool SQTable::_NewSlot(const SQObjectPtr &key,const SQObjectPtr &val)
 
     if(sq_type(mp->key) != OT_NULL) {
         n = _firstfree;  /* get a free place */
-        SQHash mph = HashObj(mp->key) & (_numofnodes - 1);
+        SQHash mph = HashObj(mp->key.Obj()) & (_numofnodes - 1);
         _HashNode *othern;  /* main position of colliding node */
 
         if (mp > n && (othern = &_nodes[mph]) != mp){
             /* yes; move colliding node into free position */
-            while (othern->next != mp){
-                assert(othern->next != NULL);
-                othern = othern->next;  /* find previous */
+            while (_NextOf(_nodes, othern) != mp){
+                assert(_NextOf(_nodes, othern) != NULL);
+                othern = _NextOf(_nodes, othern);  /* find previous */
             }
-            othern->next = n;  /* redo the chain with `n' in place of `mp' */
-            n->key = mp->key;
+            _SetNext(_nodes, othern, n);  /* redo the chain with `n' in place of `mp' */
+            n->key.Set(mp->key.Obj());
             n->val = mp->val;/* copy colliding node into free pos. (mp->next also goes) */
-            n->next = mp->next;
+            n->key._next = mp->key._next;
             mp->key.Null();
             mp->val.Null();
-            mp->next = NULL;  /* now `mp' is free */
+            mp->key._next = 0;  /* now `mp' is free */
         }
         else{
             /* new node will go into free position */
-            n->next = mp->next;  /* chain new position */
-            mp->next = n;
+            n->key._next = mp->key._next;  /* chain new position */
+            _SetNext(_nodes, mp, n);
             mp = n;
         }
     }
-    mp->key = key;
+    mp->key.Set(key);
 
     for (;;) {  /* correct `firstfree' */
-        if (sq_type(_firstfree->key) == OT_NULL && _firstfree->next == NULL) {
+        if (sq_type(_firstfree->key) == OT_NULL && _firstfree->key._next == 0) {
             mp->val = val;
             _usednodes++;
             return true;  /* OK; table still has a free place */
@@ -224,7 +209,7 @@ SQInteger SQTable::Next(bool getweakrefs,const SQObjectPtr &refpos, SQObjectPtr 
         if(sq_type(_nodes[idx].key) != OT_NULL) {
             //first found
             _HashNode &n = _nodes[idx];
-            outkey = n.key;
+            outkey = n.key.Obj();
             outval = getweakrefs?(SQObject)n.val:_realval(n.val);
             //return idx for the next iteration
             return ++idx;
@@ -304,7 +289,7 @@ static SQObjectPtr BindClosure(const SQObjectPtr &o, SQWeakRef *env)
 
 // Whether a source slot's value is bound when the lazy table binds: what binding a
 // table's closures binds (closures and native closures under string keys).
-static bool Bindable(const SQObjectPtr &key, const SQObjectPtr &val)
+static bool Bindable(const SQObject &key, const SQObjectPtr &val)
 {
     return sq_type(key) == OT_STRING && (sq_type(val) == OT_CLOSURE || sq_type(val) == OT_NATIVECLOSURE);
 }
@@ -386,9 +371,9 @@ SQTable *SQTable::_CopyVerbatim()
     _HashNode *basesrc = _nodes;
     _HashNode *basedst = nt->_nodes;
     for (SQInteger n = 0; n < _numofnodes; n++) {
-        basedst[n].key = basesrc[n].key;
+        basedst[n].key.Set(basesrc[n].key.Obj());
         basedst[n].val = basesrc[n].val;
-        basedst[n].next = basesrc[n].next ? basedst + (basesrc[n].next - basesrc) : NULL;
+        basedst[n].key._next = basesrc[n].key._next;
     }
     nt->_firstfree = basedst + (_firstfree - basesrc);
     nt->_usednodes = _usednodes;
@@ -431,17 +416,18 @@ void SQTable::Materialize()
     for (SQInteger i = 0; i < src->_numofnodes; i++) {
         _HashNode &sn = src->_nodes[i];
         if (sq_type(sn.key) == OT_NULL) continue;
-        _HashNode *o = &own[HashObj(sn.key) & (ownsize - 1)];
+        SQObject skey = sn.key.Obj();
+        _HashNode *o = &own[HashObj(skey) & (ownsize - 1)];
         do {
             if (_rawval(o->key) == _rawval(sn.key) && sq_type(o->key) == sq_type(sn.key)) break;
-        } while ((o = o->next));
+        } while ((o = _NextOf(own, o)));
         if (o) {
-            _NewSlot(sn.key, o->val);
+            _NewSlot(skey, o->val);
         }
         else {
             SQObjectPtr real = _realval(sn.val);
-            if (lz->_bind && Bindable(sn.key, real)) _NewSlot(sn.key, BindClosure(real, lz->_bind));
-            else _NewSlot(sn.key, sn.val);
+            if (lz->_bind && Bindable(skey, real)) _NewSlot(skey, BindClosure(real, lz->_bind));
+            else _NewSlot(skey, sn.val);
         }
     }
     // Then the slots it gained since, in the order they came.
@@ -450,7 +436,7 @@ void SQTable::Materialize()
         _HashNode *o = &own[HashObj(key) & (ownsize - 1)];
         do {
             if (_rawval(o->key) == _rawval(key) && sq_type(o->key) == sq_type(key)) break;
-        } while ((o = o->next));
+        } while ((o = _NextOf(own, o)));
         assert(o);
         if (o) _NewSlot(key, o->val);
     }

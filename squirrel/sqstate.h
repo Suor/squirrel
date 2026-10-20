@@ -70,7 +70,7 @@ public:
     SQInteger CollectGarbage(SQVM *vm);
     void RunMark(SQVM *vm,SQCollectable **tchain);
     SQInteger ResurrectUnreachable(SQVM *vm);
-    static void MarkObject(SQObjectPtr &o,SQCollectable **chain);
+    static void MarkObject(const SQObject &o,SQCollectable **chain);
 #endif
     SQObjectPtrVec *_metamethods;
     SQObjectPtr _metamethodsmap;
