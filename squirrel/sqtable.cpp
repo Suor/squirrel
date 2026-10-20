@@ -400,6 +400,7 @@ bool SQTable::LazyInject(SQTable *extra, SQArray *keys, SQWeakRef *env)
     inj._bind = env;
     if (env) __ObjAddRef(env);
     inj._pos = (SQInteger)_lazy->_added.size();
+    inj._nmarks = _lazy->_marks.size();
     _lazy->_injected.push_back(inj);
     return true;
 }
@@ -465,12 +466,10 @@ void SQTable::_DetachVersion()
     __ObjRelease(self);
 }
 
-// Fills this empty plain table (as Materialize sizes it) with what the lazy table `lz`
-// holding the nodes `own` stands for, up to its first `nadded` added keys, laid out as
-// the clone it stands for would be: the source's slots in the source's order, then the
-// slots it gained since, in the order they came, the ones it was given (LazyInject) where
-// they came.
-void SQTable::_FillFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger nadded)
+// Fills this empty plain table (as Materialize sizes it) with the source's slots of the
+// lazy table `lz` holding the nodes `own`, in the source's order, as the clone it stands
+// for starts.
+void SQTable::_FillFromSource(SQTableLazy *lz, _HashNode *own, SQInteger ownsize)
 {
     SQTable *src = lz->_src->_table;
     for (SQInteger i = 0; i < src->_numofnodes; i++) {
@@ -487,25 +486,27 @@ void SQTable::_FillFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUn
             else _NewSlot(skey, lz->_copy ? real : sn.val);
         }
     }
-    for (SQUnsignedInteger a = 0; a <= nadded; a++) {
-        for (SQUnsignedInteger i = 0; i < lz->_injected.size(); i++) {
-            SQTableInjected &inj = lz->_injected[i];
-            if (inj._pos != (SQInteger)a) continue;
-            for (SQInteger e = 0; e < inj._keys->Size(); e++) {
-                SQObjectPtr &key = inj._keys->_values[e];
-                _HashNode *o = _OwnNode(own, ownsize, key);
-                if (o) {
-                    _NewSlot(key, o->val);
-                    continue;
-                }
-                SQObjectPtr real;
-                inj._slots->Get(key, real);
-                if (inj._bind && Bindable(key, real)) _NewSlot(key, BindClosure(real, inj._bind));
-                else _NewSlot(key, real);
+}
+
+// Adds the slots `lz` was given after `segment` clone marks and `pos` added keys, in the
+// order given.
+void SQTable::_AddInjected(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger segment, SQUnsignedInteger pos)
+{
+    for (SQUnsignedInteger i = 0; i < lz->_injected.size(); i++) {
+        SQTableInjected &inj = lz->_injected[i];
+        if (inj._nmarks != segment || inj._pos != (SQInteger)pos) continue;
+        for (SQInteger e = 0; e < inj._keys->Size(); e++) {
+            SQObjectPtr &key = inj._keys->_values[e];
+            _HashNode *o = _OwnNode(own, ownsize, key);
+            if (o) {
+                _NewSlot(key, o->val);
+                continue;
             }
+            SQObjectPtr real;
+            inj._slots->Get(key, real);
+            if (inj._bind && Bindable(key, real)) _NewSlot(key, BindClosure(real, inj._bind));
+            else _NewSlot(key, real);
         }
-        if (a == nadded) break;
-        _AddFrom(lz, own, ownsize, a, a + 1);
     }
 }
 
@@ -519,10 +520,14 @@ SQTable::_HashNode *SQTable::_OwnNode(_HashNode *own, SQInteger ownsize, const S
     return NULL;
 }
 
-// Adds the added keys `from` to `to` of `lz`, with their values in `own`.
-void SQTable::_AddFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger from, SQUnsignedInteger to)
+// Adds the added keys `from` to `to` of `lz` (all after `segment` clone marks), with their
+// values in `own`, and the slots it was given among them, where they came.
+void SQTable::_AddFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger segment, SQUnsignedInteger from, SQUnsignedInteger to)
 {
-    for (SQUnsignedInteger a = from; a < to; a++) {
+    bool injected = lz->_injected.size() != 0;
+    for (SQUnsignedInteger a = from; ; a++) {
+        if (injected) _AddInjected(lz, own, ownsize, segment, a);
+        if (a == to) break;
         SQObjectPtr &key = lz->_added[a];
         _HashNode *o = _OwnNode(own, ownsize, key);
         assert(o);
@@ -560,11 +565,12 @@ void SQTable::Materialize()
     _usednodes = 0;
     SQUnsignedInteger nadded = lz->_added.size();
     SQUnsignedInteger nmarks = lz->_marks.size();
-    _FillFrom(lz, own, ownsize, nmarks ? lz->_marks[0] : nadded);
-    // Then each clone made since, and the keys added after it.
-    for (SQUnsignedInteger m = 0; m < nmarks; m++) {
-        _Reclone();
-        _AddFrom(lz, own, ownsize, lz->_marks[m], m + 1 < nmarks ? lz->_marks[m + 1] : nadded);
+    _FillFromSource(lz, own, ownsize);
+    // The keys added before the first clone, then each clone made since and the keys
+    // added after it; the slots given go where they came.
+    for (SQUnsignedInteger m = 0; m <= nmarks; m++) {
+        if (m) _Reclone();
+        _AddFrom(lz, own, ownsize, m, m ? lz->_marks[m - 1] : 0, m < nmarks ? lz->_marks[m] : nadded);
     }
     for (SQInteger k = 0; k < ownsize; k++) own[k].~_HashNode();
     SQ_FREE(own, ownsize * sizeof(_HashNode));

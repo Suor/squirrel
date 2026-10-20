@@ -36,8 +36,9 @@ struct SQTableVersion
 };
 
 // Slots a lazy table was given without holding them (sq_lazyinject): as if, after the
-// first `_pos` keys of its `_added`, every key of `_keys` had been added in that order with
-// its value in `_slots` bound to `_bind`. `_slots` and `_keys` are shared by every table
+// first `_pos` keys of its `_added` and the first `_nmarks` of its clone marks, every key
+// of `_keys` had been added in that order with its value in `_slots` bound to `_bind`.
+// (`_pos` alone can't say whether slots given at a mark came before or after that clone.) `_slots` and `_keys` are shared by every table
 // given the same slots; each value is bound when first read and kept, as the source's
 // closures are.
 struct SQTableInjected
@@ -46,6 +47,7 @@ struct SQTableInjected
     SQArray *_keys;
     SQWeakRef *_bind;
     SQInteger _pos;
+    SQUnsignedInteger _nmarks;
 };
 
 // What a lazy table reads through: the version of the table it was made from, the object
@@ -133,8 +135,9 @@ private:
     bool _NewSlot(const SQObject &key,const SQObjectPtr &val);
     bool _LazyGet(const SQObjectPtr &key,SQObjectPtr &val);
     bool _LazyHas(const SQObjectPtr &key);
-    void _FillFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger nadded);
-    void _AddFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger from, SQUnsignedInteger to);
+    void _FillFromSource(SQTableLazy *lz, _HashNode *own, SQInteger ownsize);
+    void _AddFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger segment, SQUnsignedInteger from, SQUnsignedInteger to);
+    void _AddInjected(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger segment, SQUnsignedInteger pos);
     void _Reclone();
     static _HashNode *_OwnNode(_HashNode *own, SQInteger ownsize, const SQObject &key);
     SQTable *_CloneLazy();
