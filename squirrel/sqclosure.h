@@ -1,6 +1,7 @@
 /*  see copyright notice in squirrel.h */
 #ifndef _SQCLOSURE_H_
 #define _SQCLOSURE_H_
+#include "sqcensus.h"
 
 
 #define _CALC_CLOSURE_SIZE(func) (sizeof(SQClosure) + (func->_noutervalues*sizeof(SQObjectPtr)) + (func->_ndefaultparams*sizeof(SQObjectPtr)))
@@ -25,6 +26,7 @@ public:
         return nc;
     }
     void Release(){
+        sq_census_forget(this);
         SQFunctionProto *f = _function;
         SQInteger size = _CALC_CLOSURE_SIZE(f);
         _DESTRUCT_VECTOR(SQObjectPtr,f->_noutervalues,_outervalues);

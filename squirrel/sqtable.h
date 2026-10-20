@@ -8,6 +8,7 @@
 */
 
 #include "sqstring.h"
+#include "sqcensus.h"
 
 
 #define hashptr(p)  ((SQHash)(((SQInteger)p) >> 3))
@@ -22,8 +23,30 @@ inline SQHash HashObj(const SQObject &key)
     }
 }
 
+struct SQTable;
+
+// A table's contents frozen for the lazy tables that read through it (see SQTable::_lazy):
+// the table itself until a write to it would change what they see, then a verbatim copy
+// made at that write. Reference counted by the lazy tables.
+struct SQTableVersion
+{
+    SQUnsignedInteger _refs;
+    SQTable *_table;
+};
+
+// What a lazy table reads through: the version of the table it was made from, the object
+// its inherited closures are bound to (or none), and the keys it gained that the source
+// lacks, in the order they came.
+struct SQTableLazy
+{
+    SQTableVersion *_src;
+    SQWeakRef *_bind;
+    sqvector<SQObjectPtr> _added;
+};
+
 struct SQTable : public SQDelegable
 {
+    friend struct SQCensus;
 private:
     struct _HashNode
     {
@@ -36,12 +59,26 @@ private:
     _HashNode *_nodes;
     SQInteger _numofnodes;
     SQInteger _usednodes;
+    // A lazy table behaves exactly as a clone of its source whose closures were bound
+    // (bindenv) to _lazy->_bind at the clone, but holds only what was read or written:
+    // its own nodes keep the slots written and the bound closures handed out (so a
+    // closure is the same object on every read). Anything that needs the whole table
+    // (iteration, clone, delete, clear) first makes it a plain table, laid out as that
+    // clone would be.
+    SQTableLazy *_lazy;
+    // Set while lazy tables read through this one's contents as they are now.
+    SQTableVersion *_version;
 
 ///////////////////////////
     void AllocNodes(SQInteger nSize);
     void Rehash(bool force);
     SQTable(SQSharedState *ss, SQInteger nInitialSize);
     void _ClearNodes();
+    bool _NewSlot(const SQObjectPtr &key,const SQObjectPtr &val);
+    bool _LazyGet(const SQObjectPtr &key,SQObjectPtr &val);
+    void _DetachVersion();
+    void _ReleaseLazy();
+    SQTable *_CopyVerbatim();
 public:
     static SQTable* Create(SQSharedState *ss,SQInteger nInitialSize)
     {
@@ -50,10 +87,22 @@ public:
         newtable->_delegate = NULL;
         return newtable;
     }
+    // A lazy table reading through `src` (see _lazy), its closures not bound.
+    static SQTable* CreateLazy(SQSharedState *ss, SQTable *src);
+    // Binds the closures a lazy table reads from its source to `env` from now on.
+    void LazyBind(SQWeakRef *env);
+    // Makes a lazy table a plain one, laid out as the clone it stands for would be.
+    void Materialize();
+    bool IsLazy() const { return _lazy != NULL; }
+    // Whether the table has `key`, without reading it (no closure is bound).
+    bool Has(const SQObjectPtr &key);
     void Finalize();
     SQTable *Clone();
     ~SQTable()
     {
+        sq_census_forget(this);
+        _ReleaseLazy();
+        if (_version) _version->_table = NULL;
         SetDelegate(NULL);
         REMOVE_FROM_CHAIN(&_sharedstate->_gc_chain, this);
         for (SQInteger i = 0; i < _numofnodes; i++) _nodes[i].~_HashNode();
@@ -98,7 +147,7 @@ public:
     bool NewSlot(const SQObjectPtr &key,const SQObjectPtr &val);
     SQInteger Next(bool getweakrefs,const SQObjectPtr &refpos, SQObjectPtr &outkey, SQObjectPtr &outval);
 
-    SQInteger CountUsed(){ return _usednodes;}
+    SQInteger CountUsed(){ return _lazy ? _lazy->_src->_table->CountUsed() + (SQInteger)_lazy->_added.size() : _usednodes;}
     void Clear();
     void Release()
     {

@@ -11,6 +11,7 @@ struct SQTable;
 
 struct SQStringTable
 {
+    friend struct SQCensus;
     SQStringTable(SQSharedState*ss);
     ~SQStringTable();
     SQString *Add(const SQChar *,SQInteger len);

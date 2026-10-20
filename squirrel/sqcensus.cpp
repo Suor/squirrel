@@ -1,0 +1,274 @@
+/*
+see copyright notice in squirrel.h
+*/
+// A heap census for measuring what the VM's objects cost: every collectable object, its
+// size in bytes as allocated, and for tables, closures and function prototypes the
+// references and shape an offline analysis needs. Measurement only: it reads the VM.
+#include "sqpcheader.h"
+#include <stdio.h>
+#include "sqvm.h"
+#include "sqstring.h"
+#include "sqtable.h"
+#include "sqarray.h"
+#include "sqfuncproto.h"
+#include "sqclosure.h"
+#include "sqclass.h"
+#include "squserdata.h"
+#include "sqcensus.h"
+#include <unordered_map>
+#include <unordered_set>
+
+int sq_census_on = 0;
+static int census_enabled = 0;
+static int census_paused = 0;
+
+struct CensusTableTrack
+{
+    int flags; // 1 iterated, 2 cloned
+    std::unordered_set<SQRawObjectVal> gets, writes;
+};
+static std::unordered_map<void *, CensusTableTrack> *census_tables;
+static std::unordered_set<void *> *census_fetched;
+
+static void census_update() { sq_census_on = census_enabled && census_paused == 0; }
+
+void sq_census_get(SQTable *t, const SQObjectPtr &key, const SQObjectPtr &val)
+{
+    (*census_tables)[t].gets.insert(_rawval(key));
+    if (sq_type(val) == OT_CLOSURE || sq_type(val) == OT_NATIVECLOSURE) census_fetched->insert(val._unVal.pRefCounted);
+}
+void sq_census_write(SQTable *t, const SQObjectPtr &key) { (*census_tables)[t].writes.insert(_rawval(key)); }
+void sq_census_iterate(SQTable *t) { (*census_tables)[t].flags |= 1; }
+void sq_census_clone(SQTable *t) { (*census_tables)[t].flags |= 2; }
+void sq_census_forget(void *o)
+{
+    if (!census_tables) return;
+    census_tables->erase(o);
+    census_fetched->erase(o);
+}
+
+// 1: start tracking (forgetting what was tracked), 0: stop, 2: pause, 3: resume.
+void sq_censustrack(HSQUIRRELVM v, SQInteger mode)
+{
+    (void)v;
+    if (!census_tables) {
+        census_tables = new std::unordered_map<void *, CensusTableTrack>();
+        census_fetched = new std::unordered_set<void *>();
+    }
+    switch (mode) {
+    case 1: census_tables->clear(); census_fetched->clear(); census_enabled = 1; census_paused = 0; break;
+    case 0: census_enabled = 0; break;
+    case 2: census_paused++; break;
+    case 3: if (census_paused > 0) census_paused--; break;
+    }
+    census_update();
+}
+
+static void census_keys(FILE *f, const char *tag, const std::unordered_set<SQRawObjectVal> &keys, SQTable *t);
+static std::unordered_set<SQRawObjectVal> *census_strings;
+
+static void census_value(FILE *f, const SQObjectPtr &o);
+static void *census_env(SQWeakRef *env);
+
+struct SQCensus
+{
+    static SQInteger TableNodes(SQTable *t) { return t->_numofnodes; }
+    static void Header(FILE *f, SQTable *t, int weak)
+    {
+        SQInteger nodes = TableNodes(t);
+        SQInteger extra = 0;
+        if (t->_lazy) extra += sizeof(SQTableLazy) + t->_lazy->_added.capacity() * sizeof(SQObjectPtr);
+        if (t->_version) extra += sizeof(SQTableVersion);
+        fprintf(f, "T %p %lld %lld %lld %p %d\n", (void *)t,
+            (long long)(sizeof(SQTable) + nodes * TableNodeSize() + extra), (long long)nodes,
+            (long long)t->_usednodes, (void *)t->_delegate, weak);
+        if (t->_lazy)
+            fprintf(f, "L %p %p %lld\n", (void *)t->_lazy->_src->_table, census_env(t->_lazy->_bind),
+                (long long)t->_lazy->_added.size());
+    }
+    // A table's own slots (a lazy table's are only what it holds), without iterating it.
+    static void Slots(FILE *f, SQTable *t)
+    {
+        for (SQInteger i = 0; i < t->_numofnodes; i++) {
+            SQTable::_HashNode &n = t->_nodes[i];
+            if (sq_type(n.key) == OT_NULL) continue;
+            fputs("s ", f);
+            census_value(f, n.key);
+            fputc(' ', f);
+            census_value(f, n.val);
+            fputc('\n', f);
+        }
+    }
+    static SQInteger TableNodeSize() { return sizeof(SQTable::_HashNode); }
+    static void StringSet(SQSharedState *ss, std::unordered_set<SQRawObjectVal> &out)
+    {
+        SQStringTable *st = ss->_stringtable;
+        for (SQUnsignedInteger i = 0; i < st->_numofslots; i++)
+            for (SQString *s = st->_strings[i]; s; s = s->_next) out.insert((SQRawObjectVal)s);
+    }
+    static void Strings(SQSharedState *ss, SQInteger &count, SQInteger &bytes)
+    {
+        SQStringTable *st = ss->_stringtable;
+        count = 0;
+        bytes = (SQInteger)(st->_numofslots * sizeof(SQString *));
+        for (SQUnsignedInteger i = 0; i < st->_numofslots; i++) {
+            for (SQString *s = st->_strings[i]; s; s = s->_next) {
+                count++;
+                bytes += (SQInteger)(sizeof(SQString) + (s->_len + 1) * sizeof(SQChar));
+            }
+        }
+    }
+};
+
+static void census_escape(FILE *f, const SQChar *s, SQInteger len)
+{
+    for (SQInteger i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c <= ' ' || c == '%' || c >= 0x7f) fprintf(f, "%%%02X", c);
+        else fputc(c, f);
+    }
+    if (len == 0) fputs("%", f);
+}
+
+static void census_value(FILE *f, const SQObjectPtr &o)
+{
+    switch (sq_type(o)) {
+    case OT_NULL: fputs("n", f); break;
+    case OT_INTEGER: fprintf(f, "i%lld", (long long)_integer(o)); break;
+    case OT_FLOAT: fputs("f", f); break;
+    case OT_BOOL: fprintf(f, "b%d", _integer(o) ? 1 : 0); break;
+    case OT_STRING: fputs("s", f); census_escape(f, _stringval(o), _string(o)->_len); break;
+    case OT_TABLE: fprintf(f, "T%p", (void *)_table(o)); break;
+    case OT_ARRAY: fprintf(f, "A%p", (void *)_array(o)); break;
+    case OT_CLOSURE: fprintf(f, "C%p", (void *)_closure(o)); break;
+    case OT_NATIVECLOSURE: fprintf(f, "N%p", (void *)_nativeclosure(o)); break;
+    case OT_WEAKREF: fprintf(f, "W%p", (void *)_weakref(o)->_obj._unVal.pRefCounted); break;
+    default: fprintf(f, "o%x:%p", (unsigned)sq_type(o), (void *)o._unVal.pRefCounted); break;
+    }
+}
+
+static void *census_env(SQWeakRef *env)
+{
+    if (!env || sq_type(env->_obj) == OT_NULL) return NULL;
+    return (void *)env->_obj._unVal.pRefCounted;
+}
+
+SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
+{
+    FILE *f = fopen(path, "w");
+    if (!f) return SQ_ERROR;
+    SQSharedState *ss = _ss(v);
+    SQInteger scount, sbytes;
+    SQCensus::Strings(ss, scount, sbytes);
+    fprintf(f, "S %lld %lld\n", (long long)scount, (long long)sbytes);
+    std::unordered_set<SQRawObjectVal> strings;
+    SQCensus::StringSet(ss, strings);
+    census_strings = &strings;
+    fprintf(f, "Z table=%d node=%lld closure=%d nclosure=%d array=%d proto=%d weakref=%d outer=%d string=%d\n",
+        (int)sizeof(SQTable), (long long)SQCensus::TableNodeSize(), (int)sizeof(SQClosure),
+        (int)sizeof(SQNativeClosure), (int)sizeof(SQArray), (int)sizeof(SQFunctionProto),
+        (int)sizeof(SQWeakRef), (int)sizeof(SQOuter), (int)sizeof(SQString));
+    for (SQCollectable *c = ss->_gc_chain; c; c = c->_next) {
+        int weak = c->_weakref ? 1 : 0;
+        switch (c->GetType()) {
+        case OT_TABLE: {
+            SQTable *t = (SQTable *)c;
+            SQCensus::Header(f, t, weak);
+            int on = sq_census_on;
+            sq_census_on = 0;
+            if (census_tables) {
+                auto it = census_tables->find(t);
+                if (it != census_tables->end()) {
+                    if (it->second.flags) fprintf(f, "x %d\n", it->second.flags);
+                    census_keys(f, "g", it->second.gets, t);
+                    census_keys(f, "w", it->second.writes, t);
+                }
+            }
+            SQCensus::Slots(f, t);
+            sq_census_on = on;
+            break;
+        }
+        case OT_ARRAY: {
+            SQArray *a = (SQArray *)c;
+            fprintf(f, "A %p %lld %lld %lld %d\n", (void *)a,
+                (long long)(sizeof(SQArray) + a->_values.capacity() * sizeof(SQObjectPtr)),
+                (long long)a->Size(), (long long)a->_values.capacity(), weak);
+            break;
+        }
+        case OT_CLOSURE: {
+            SQClosure *cl = (SQClosure *)c;
+            SQFunctionProto *p = cl->_function;
+            fprintf(f, "C %p %lld %p %p %lld %lld %d %d\n", (void *)cl, (long long)_CALC_CLOSURE_SIZE(p),
+                (void *)p, census_env(cl->_env), (long long)p->_noutervalues, (long long)p->_ndefaultparams, weak,
+                census_fetched && census_fetched->count(cl) ? 1 : 0);
+            break;
+        }
+        case OT_NATIVECLOSURE: {
+            SQNativeClosure *nc = (SQNativeClosure *)c;
+            fprintf(f, "N %p %lld %p %lld %d %d ", (void *)nc,
+                (long long)(_CALC_NATVIVECLOSURE_SIZE(nc->_noutervalues) + nc->_typecheck.capacity() * sizeof(SQInteger)),
+                census_env(nc->_env), (long long)nc->_noutervalues, weak,
+                census_fetched && census_fetched->count(nc) ? 1 : 0);
+            census_value(f, nc->_name);
+            fputc('\n', f);
+            break;
+        }
+        case OT_FUNCPROTO: {
+            SQFunctionProto *p = (SQFunctionProto *)c;
+            fprintf(f, "F %p %lld %lld %lld %lld %lld %lld %lld %lld %lld ", (void *)p,
+                (long long)_FUNC_SIZE(p->_ninstructions, p->_nliterals, p->_nparameters, p->_nfunctions,
+                    p->_noutervalues, p->_nlineinfos, p->_nlocalvarinfos, p->_ndefaultparams),
+                (long long)p->_ninstructions, (long long)p->_nliterals, (long long)p->_nparameters,
+                (long long)p->_nfunctions, (long long)p->_noutervalues, (long long)p->_nlineinfos,
+                (long long)p->_nlocalvarinfos, (long long)p->_ndefaultparams);
+            census_value(f, p->_name);
+            fputc(' ', f);
+            census_value(f, p->_sourcename);
+            fputc('\n', f);
+            break;
+        }
+        case OT_OUTER:
+            fprintf(f, "O %p %lld %d\n", (void *)c, (long long)sizeof(SQOuter), weak);
+            break;
+        case OT_USERDATA: {
+            SQUserData *u = (SQUserData *)c;
+            fprintf(f, "U %p %lld %d\n", (void *)u, (long long)(sizeof(SQUserData) + u->_size), weak);
+            break;
+        }
+        case OT_INSTANCE: {
+            SQInstance *i = (SQInstance *)c;
+            fprintf(f, "I %p %lld %d\n", (void *)i, (long long)i->_memsize, weak);
+            break;
+        }
+        case OT_CLASS: {
+            SQClass *k = (SQClass *)c;
+            fprintf(f, "K %p %lld %d\n", (void *)k,
+                (long long)(sizeof(SQClass) + k->_defaultvalues.capacity() * sizeof(SQClassMember)
+                    + k->_methods.capacity() * sizeof(SQClassMember)), weak);
+            break;
+        }
+        default:
+            fprintf(f, "X %p %x %d\n", (void *)c, (unsigned)c->GetType(), weak);
+            break;
+        }
+    }
+    census_strings = NULL;
+    fclose(f);
+    return SQ_OK;
+}
+
+// A tracked table's keys: strings by their text, others by their raw value.
+static void census_keys(FILE *f, const char *tag, const std::unordered_set<SQRawObjectVal> &keys, SQTable *t)
+{
+    (void)t;
+    for (SQRawObjectVal k : keys) {
+        fprintf(f, "%s ", tag);
+        if (census_strings && census_strings->count(k)) {
+            SQString *str = (SQString *)k;
+            fputc('s', f);
+            census_escape(f, str->_val, str->_len);
+        }
+        else fprintf(f, "#%llx", (unsigned long long)k);
+        fputc('\n', f);
+    }
+}

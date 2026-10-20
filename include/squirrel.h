@@ -224,6 +224,10 @@ SQUIRREL_API SQRESULT sq_compile(HSQUIRRELVM v,SQLEXREADFUNC read,SQUserPointer 
 SQUIRREL_API SQRESULT sq_compilebuffer(HSQUIRRELVM v,const SQChar *s,SQInteger size,const SQChar *sourcename,SQBool raiseerror);
 SQUIRREL_API void sq_enabledebuginfo(HSQUIRRELVM v, SQBool enable);
 SQUIRREL_API SQBool sq_getdebuginfo(HSQUIRRELVM v);
+/* writes every collectable object, its size and its references to a file (measurement) */
+SQUIRREL_API SQRESULT sq_census(HSQUIRRELVM v,const SQChar *path);
+/* tracks table reads, writes and iteration for the census: 1 start, 0 stop, 2 pause, 3 resume */
+SQUIRREL_API void sq_censustrack(HSQUIRRELVM v,SQInteger mode);
 SQUIRREL_API void sq_notifyallexceptions(HSQUIRRELVM v, SQBool enable);
 SQUIRREL_API void sq_setcompilererrorhandler(HSQUIRRELVM v,SQCOMPILERERROR f);
 
@@ -246,6 +250,12 @@ SQUIRREL_API void sq_newarray(HSQUIRRELVM v,SQInteger size);
 SQUIRREL_API void sq_newclosure(HSQUIRRELVM v,SQFUNCTION func,SQUnsignedInteger nfreevars);
 SQUIRREL_API SQRESULT sq_setparamscheck(HSQUIRRELVM v,SQInteger nparamscheck,const SQChar *typemask);
 SQUIRREL_API SQRESULT sq_bindenv(HSQUIRRELVM v,SQInteger idx);
+/* pushes a lazy clone of the table at idx: a table that behaves as `clone` of it would,
+   holding only the slots read or written (see SQTable::_lazy) */
+SQUIRREL_API SQRESULT sq_lazyclone(HSQUIRRELVM v,SQInteger idx);
+/* the lazy table at idx binds its source's closures to the object on top (popped), as
+   binding every closure of a clone (sq_bindenv) would, when each is first read */
+SQUIRREL_API SQRESULT sq_lazybind(HSQUIRRELVM v,SQInteger idx);
 SQUIRREL_API SQRESULT sq_setf32math(HSQUIRRELVM v,SQInteger idx,SQBool on);
 SQUIRREL_API SQRESULT sq_setclosureroot(HSQUIRRELVM v,SQInteger idx);
 SQUIRREL_API SQRESULT sq_getclosureroot(HSQUIRRELVM v,SQInteger idx);

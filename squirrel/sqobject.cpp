@@ -589,6 +589,7 @@ void SQTable::Mark(SQCollectable **chain)
 {
     START_MARK()
         if(_delegate) _delegate->Mark(chain);
+        if(_lazy && _lazy->_src->_table) _lazy->_src->_table->Mark(chain);
         SQInteger len = _numofnodes;
         for(SQInteger i = 0; i < len; i++){
             SQSharedState::MarkObject(_nodes[i].key, chain);

@@ -518,6 +518,29 @@ SQRESULT sq_bindenv(HSQUIRRELVM v,SQInteger idx)
     return SQ_OK;
 }
 
+SQRESULT sq_lazyclone(HSQUIRRELVM v,SQInteger idx)
+{
+    SQObjectPtr &o = stack_get(v,idx);
+    if(sq_type(o) != OT_TABLE)
+        return sq_throwerror(v,_SC("the source is not a table"));
+    SQTable *src = _table(o);
+    v->Push(SQObjectPtr(SQTable::CreateLazy(_ss(v), src)));
+    return SQ_OK;
+}
+
+SQRESULT sq_lazybind(HSQUIRRELVM v,SQInteger idx)
+{
+    SQObjectPtr &o = stack_get(v,idx);
+    SQObjectPtr &env = stack_get(v,-1);
+    if(sq_type(o) != OT_TABLE)
+        return sq_throwerror(v,_SC("the target is not a table"));
+    if(!sq_istable(env) && !sq_isarray(env) && !sq_isclass(env) && !sq_isinstance(env))
+        return sq_throwerror(v,_SC("invalid environment"));
+    _table(o)->LazyBind(_refcounted(env)->GetWeakRef(sq_type(env)));
+    v->Pop();
+    return SQ_OK;
+}
+
 SQRESULT sq_getclosurename(HSQUIRRELVM v,SQInteger idx)
 {
     SQObjectPtr &o = stack_get(v,idx);
