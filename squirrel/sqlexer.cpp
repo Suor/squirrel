@@ -374,7 +374,9 @@ SQInteger SQLexer::ReadString(SQInteger ndelim,bool verbatim)
                     NEXT();
                     switch(CUR_CHAR) {
                     case _SC('x'):  {
-                        const SQInteger maxdigits = sizeof(SQChar) * 2;
+                        /* Squirrel 3.0 (the original engine's) reads up to 4 hex digits
+                           and keeps the low byte: "\xB0b" is 0x0B. */
+                        const SQInteger maxdigits = 4;
                         SQChar temp[maxdigits + 1];
                         ProcessStringHexEscape(temp, maxdigits);
                         SQChar *stemp;

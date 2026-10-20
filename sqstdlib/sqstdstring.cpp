@@ -80,8 +80,8 @@ SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen
     SQInteger allocated = (format_size+2)*sizeof(SQChar);
     dest = sq_getscratchpad(v,allocated);
     SQInteger n = 0,i = 0, nparam = nformatstringidx+1, w = 0;
-    //while(format[n] != '\0')
-    while(n < format_size)
+    /* Squirrel 3.0 (the original engine's) stops at the first NUL. */
+    while(n < format_size && format[n] != '\0')
     {
         if(format[n] != '%') {
             assert(i < allocated);
@@ -95,7 +95,7 @@ SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen
         else {
             n++;
             if( nparam > sq_gettop(v) )
-                return sq_throwerror(v,_SC("not enough parameters for the given format string"));
+                return sq_throwerror(v,_SC("not enough paramters for the given format string") /* sic, as Squirrel 3.0 */);
             n = validate_format(v,fmt,format,n,w);
             if(n < 0) return -1;
             SQInteger addlen = 0;
@@ -125,13 +125,14 @@ SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen
                 }
 #endif
             case 'c':
-                if(SQ_FAILED(sq_getinteger(v,nparam,&ti)))
+                /* Squirrel 3.0's sq_getinteger took numbers only: a bool is an error. */
+                if(sq_gettype(v,nparam) == OT_BOOL || SQ_FAILED(sq_getinteger(v,nparam,&ti)))
                     return sq_throwerror(v,_SC("integer expected for the specified format"));
                 addlen = (ADDITIONAL_FORMAT_SPACE)+((w+1)*sizeof(SQChar));
                 valtype = 'i';
                 break;
             case 'f': case 'g': case 'G': case 'e':  case 'E':
-                if(SQ_FAILED(sq_getfloat(v,nparam,&tf)))
+                if(sq_gettype(v,nparam) == OT_BOOL || SQ_FAILED(sq_getfloat(v,nparam,&tf)))
                     return sq_throwerror(v,_SC("float expected for the specified format"));
                 addlen = (ADDITIONAL_FORMAT_SPACE)+((w+1)*sizeof(SQChar));
                 valtype = 'f';
@@ -246,40 +247,31 @@ static SQInteger _string_rstrip(HSQUIRRELVM v)
     return 1;
 }
 
+/* Squirrel 3.0's split, the original engine's: strtok semantics. Every byte of the
+   separators string separates, both strings end at their first NUL, and empty tokens
+   are skipped (so "a,,b" gives ["a","b"] and ",," gives []). Exactly two arguments.
+   Written as a loop rather than with strtok, which keeps hidden global state. */
+static bool __is_sep(const SQChar *seps,SQChar c)
+{
+    for(; *seps != '\0'; seps++) if(*seps == c) return true;
+    return false;
+}
+
 static SQInteger _string_split(HSQUIRRELVM v)
 {
     const SQChar *str,*seps;
-    SQInteger sepsize;
-    SQBool skipempty = SQFalse;
     sq_getstring(v,2,&str);
-    sq_getstringandsize(v,3,&seps,&sepsize);
-    if(sepsize == 0) return sq_throwerror(v,_SC("empty separators string"));
-    if(sq_gettop(v)>3) {
-        sq_getbool(v,4,&skipempty);
-    }
-    const SQChar *start = str;
-    const SQChar *end = str;
+    sq_getstring(v,3,&seps);
+    if(sq_getsize(v,3) == 0) return sq_throwerror(v,_SC("empty separators string"));
     sq_newarray(v,0);
-    while(*end != '\0')
+    const SQChar *cur = str;
+    for(;;)
     {
-        SQChar cur = *end;
-        for(SQInteger i = 0; i < sepsize; i++)
-        {
-            if(cur == seps[i])
-            {
-                if(!skipempty || (end != start)) {
-                    sq_pushstring(v,start,end-start);
-                    sq_arrayappend(v,-2);
-                }
-                start = end + 1;
-                break;
-            }
-        }
-        end++;
-    }
-    if(end != start)
-    {
-        sq_pushstring(v,start,end-start);
+        while(*cur != '\0' && __is_sep(seps,*cur)) cur++;
+        if(*cur == '\0') break;
+        const SQChar *start = cur;
+        while(*cur != '\0' && !__is_sep(seps,*cur)) cur++;
+        sq_pushstring(v,start,cur-start);
         sq_arrayappend(v,-2);
     }
     return 1;
@@ -511,7 +503,7 @@ static const SQRegFunction stringlib_funcs[]={
     _DECL_FUNC(strip,2,_SC(".s")),
     _DECL_FUNC(lstrip,2,_SC(".s")),
     _DECL_FUNC(rstrip,2,_SC(".s")),
-    _DECL_FUNC(split,-3,_SC(".ssb")),
+    _DECL_FUNC(split,3,_SC(".ss")),
     _DECL_FUNC(escape,2,_SC(".s")),
     _DECL_FUNC(startswith,3,_SC(".ss")),
     _DECL_FUNC(endswith,3,_SC(".ss")),
