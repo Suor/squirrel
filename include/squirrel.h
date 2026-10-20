@@ -255,6 +255,8 @@ SQUIRREL_API void sq_pushfloat(HSQUIRRELVM v,SQFloat f);
    MSVC UCRT writes it, independent of the platform C library (snprintf semantics:
    returns the full length, -1 for a bad spec) */
 SQUIRREL_API SQInteger sq_formatfloat(SQChar *buf,SQInteger bufsize,const SQChar *spec,SQFloat f);
+/* the same, with C/IEEE rounding (exact ties to even) and glibc's inf/nan */
+SQUIRREL_API SQInteger sq_formatfloat_ieee(SQChar *buf,SQInteger bufsize,const SQChar *spec,SQFloat f);
 SQUIRREL_API void sq_pushinteger(HSQUIRRELVM v,SQInteger n);
 SQUIRREL_API void sq_pushbool(HSQUIRRELVM v,SQBool b);
 SQUIRREL_API void sq_pushuserpointer(HSQUIRRELVM v,SQUserPointer p);

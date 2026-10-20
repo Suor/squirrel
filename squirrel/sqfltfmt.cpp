@@ -14,6 +14,10 @@
       "-nan(ind)", a signalling NaN "nan(snan)" (upper case for %E/%G); the
       precision doesn't apply to them, but width and the 0 flag do ("-000nan(ind)").
     Verified against the original game.
+
+    sq_formatfloat_ieee is the modern variant (format3_2): the same exact digits, but
+    ties round to even, as C and IEEE 754 specify, and inf/NaN as glibc writes them
+    ("inf", "nan", "-nan"; the 0 flag pads them with spaces).
 */
 #include "sqpcheader.h"
 #include <string.h>
@@ -134,12 +138,16 @@ void expand(unsigned long long mant, int exp2, Decimal &dec)
     dec.point = point;
 }
 
-/* Keeps the first `keep` digits, rounding half away from zero on the exact digits. */
-void round_to(Decimal &dec, int keep)
+/* Keeps the first `keep` digits, rounding the exact digits half away from zero (the
+   original's CRT) or half to even. */
+void round_to(Decimal &dec, int keep, bool even)
 {
     if (keep >= dec.len) return;
     if (keep < 0) { dec.len = 0; return; }
     bool up = dec.d[keep] >= '5';
+    /* a tie: the 5 is the last digit (trailing zeros are stripped) */
+    if (even && dec.d[keep] == '5' && keep == dec.len - 1)
+        up = keep > 0 && ((dec.d[keep - 1] - '0') & 1);
     dec.len = keep;
     if (up) {
         int i = keep - 1;
@@ -203,7 +211,7 @@ void strip_g(Out &o, int start)
 
 }
 
-SQInteger sq_formatfloat(SQChar *buf, SQInteger bufsize, const SQChar *spec, SQFloat value)
+static SQInteger formatfloat(SQChar *buf, SQInteger bufsize, const SQChar *spec, SQFloat value, bool msvc)
 {
     /* parse %[-+ #0]*[width][.prec](e|E|f|g|G) */
     const SQChar *s = spec;
@@ -246,6 +254,7 @@ SQInteger sq_formatfloat(SQChar *buf, SQInteger bufsize, const SQChar *spec, SQF
     if (bexp == 0x7ff) {
         const char *word;
         if (frac == 0) word = upper ? "INF" : "inf";
+        else if (!msvc) word = upper ? "NAN" : "nan";
         else if (neg && frac == 0x8000000000000ull) word = upper ? "NAN(IND)" : "nan(ind)";
         else if (!(frac & 0x8000000000000ull)) word = upper ? "NAN(SNAN)" : "nan(snan)";
         else word = upper ? "NAN" : "nan";
@@ -259,17 +268,17 @@ SQInteger sq_formatfloat(SQChar *buf, SQInteger bufsize, const SQChar *spec, SQF
 
         if (conv == 'f') {
             if (prec < 0) prec = 6;
-            round_to(dec, dec.point + prec);
+            round_to(dec, dec.point + prec, !msvc);
             put_fixed(o, dec, prec, alt);
         }
         else if (conv == 'e' || conv == 'E') {
             if (prec < 0) prec = 6;
-            round_to(dec, prec + 1);
+            round_to(dec, prec + 1, !msvc);
             put_exp(o, dec, prec, alt, dec.len ? dec.point - 1 : 0, conv);
         }
         else {
             int p = prec < 0 ? 6 : prec == 0 ? 1 : prec;
-            round_to(dec, p);
+            round_to(dec, p, !msvc);
             int x = dec.len ? dec.point - 1 : 0;
             if (p > x && x >= -4) put_fixed(o, dec, p - 1 - x, alt);
             else put_exp(o, dec, p - 1, alt, x, upper ? 'E' : 'e');
@@ -278,6 +287,7 @@ SQInteger sq_formatfloat(SQChar *buf, SQInteger bufsize, const SQChar *spec, SQF
     }
 
     char sign = neg ? '-' : plus ? '+' : space ? ' ' : 0;
+    if (!msvc && bexp == 0x7ff) zero = false;
     int len = o.n + (sign ? 1 : 0);
     int pad = width > len ? width - len : 0;
     SQInteger total = len + pad;
@@ -292,4 +302,14 @@ SQInteger sq_formatfloat(SQChar *buf, SQInteger bufsize, const SQChar *spec, SQF
     if (bufsize > 0) buf[w < bufsize ? w : bufsize - 1] = '\0';
     if (body != stackbody) sq_free(body, cap);
     return total;
+}
+
+SQInteger sq_formatfloat(SQChar *buf, SQInteger bufsize, const SQChar *spec, SQFloat value)
+{
+    return formatfloat(buf, bufsize, spec, value, true);
+}
+
+SQInteger sq_formatfloat_ieee(SQChar *buf, SQInteger bufsize, const SQChar *spec, SQFloat value)
+{
+    return formatfloat(buf, bufsize, spec, value, false);
 }

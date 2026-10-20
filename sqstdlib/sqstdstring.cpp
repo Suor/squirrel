@@ -67,7 +67,11 @@ static SQInteger validate_format(HSQUIRRELVM v, SQChar *fmt, const SQChar *src, 
     return n;
 }
 
-SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen,SQChar **output)
+/* modern: Squirrel 3.2's format (format3_2) instead of 3.0's, the original engine's:
+   the whole format string (NULs included), bools for numbers, "parameters" spelt
+   right, and floats rounded as C and IEEE 754 specify (exact ties to even). Floats
+   never go through the C library either way. */
+static SQRESULT format_impl(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen,SQChar **output,bool modern)
 {
     const SQChar *format;
     SQChar *dest;
@@ -81,7 +85,7 @@ SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen
     dest = sq_getscratchpad(v,allocated);
     SQInteger n = 0,i = 0, nparam = nformatstringidx+1, w = 0;
     /* Squirrel 3.0 (the original engine's) stops at the first NUL. */
-    while(n < format_size && format[n] != '\0')
+    while(n < format_size && (modern || format[n] != '\0'))
     {
         if(format[n] != '%') {
             assert(i < allocated);
@@ -95,7 +99,8 @@ SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen
         else {
             n++;
             if( nparam > sq_gettop(v) )
-                return sq_throwerror(v,_SC("not enough paramters for the given format string") /* sic, as Squirrel 3.0 */);
+                return sq_throwerror(v,modern ? _SC("not enough parameters for the given format string")
+                    : _SC("not enough paramters for the given format string") /* sic, as Squirrel 3.0 */);
             n = validate_format(v,fmt,format,n,w);
             if(n < 0) return -1;
             SQInteger addlen = 0;
@@ -126,13 +131,13 @@ SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen
 #endif
             case 'c':
                 /* Squirrel 3.0's sq_getinteger took numbers only: a bool is an error. */
-                if(sq_gettype(v,nparam) == OT_BOOL || SQ_FAILED(sq_getinteger(v,nparam,&ti)))
+                if((!modern && sq_gettype(v,nparam) == OT_BOOL) || SQ_FAILED(sq_getinteger(v,nparam,&ti)))
                     return sq_throwerror(v,_SC("integer expected for the specified format"));
                 addlen = (ADDITIONAL_FORMAT_SPACE)+((w+1)*sizeof(SQChar));
                 valtype = 'i';
                 break;
             case 'f': case 'g': case 'G': case 'e':  case 'E':
-                if(sq_gettype(v,nparam) == OT_BOOL || SQ_FAILED(sq_getfloat(v,nparam,&tf)))
+                if((!modern && sq_gettype(v,nparam) == OT_BOOL) || SQ_FAILED(sq_getfloat(v,nparam,&tf)))
                     return sq_throwerror(v,_SC("float expected for the specified format"));
                 addlen = (ADDITIONAL_FORMAT_SPACE)+((w+1)*sizeof(SQChar));
                 valtype = 'f';
@@ -149,11 +154,12 @@ SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen
             case 'f': {
                 /* our own formatter, not the C library's: the original's MSVC CRT
                    output on every platform (half-away rounding, "-nan(ind)") */
-                SQInteger flen = sq_formatfloat(NULL,0,fmt,tf);
+                SQInteger (*ff)(SQChar *,SQInteger,const SQChar *,SQFloat) = modern ? sq_formatfloat_ieee : sq_formatfloat;
+                SQInteger flen = ff(NULL,0,fmt,tf);
                 if(flen < 0) return sq_throwerror(v,_SC("invalid format"));
                 allocated += flen*sizeof(SQChar);
                 dest = sq_getscratchpad(v,allocated);
-                i += sq_formatfloat(&dest[i],flen+1,fmt,tf);
+                i += ff(&dest[i],flen+1,fmt,tf);
                 break;
                 }
             };
@@ -164,6 +170,11 @@ SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen
     dest[i] = '\0';
     *output = dest;
     return SQ_OK;
+}
+
+SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen,SQChar **output)
+{
+    return format_impl(v,nformatstringidx,outlen,output,false);
 }
 
 void sqstd_pushstringf(HSQUIRRELVM v,const SQChar *s,...)
@@ -203,6 +214,17 @@ static SQInteger _string_format(HSQUIRRELVM v)
     SQChar *dest = NULL;
     SQInteger length = 0;
     if(SQ_FAILED(sqstd_format(v,2,&length,&dest)))
+        return -1;
+    sq_pushstring(v,dest,length);
+    return 1;
+}
+
+/* format3_2: this engine's extension, Squirrel 3.2's format (see format_impl) */
+static SQInteger _string_format3_2(HSQUIRRELVM v)
+{
+    SQChar *dest = NULL;
+    SQInteger length = 0;
+    if(SQ_FAILED(format_impl(v,2,&length,&dest,true)))
         return -1;
     sq_pushstring(v,dest,length);
     return 1;
@@ -281,6 +303,48 @@ static SQInteger _string_split(HSQUIRRELVM v)
         const SQChar *start = cur;
         while(*cur != '\0' && !__is_sep(seps,*cur)) cur++;
         sq_pushstring(v,start,cur-start);
+        sq_arrayappend(v,-2);
+    }
+    return 1;
+}
+
+/* split3_2: this engine's extension, Squirrel 3.2's split. Empty tokens are kept
+   unless the optional third argument (skipempty) is true; the string ends at its
+   first NUL, the separators string doesn't. */
+static SQInteger _string_split3_2(HSQUIRRELVM v)
+{
+    const SQChar *str,*seps;
+    SQInteger sepsize;
+    SQBool skipempty = SQFalse;
+    sq_getstring(v,2,&str);
+    sq_getstringandsize(v,3,&seps,&sepsize);
+    if(sepsize == 0) return sq_throwerror(v,_SC("empty separators string"));
+    if(sq_gettop(v)>3) {
+        sq_getbool(v,4,&skipempty);
+    }
+    const SQChar *start = str;
+    const SQChar *end = str;
+    sq_newarray(v,0);
+    while(*end != '\0')
+    {
+        SQChar cur = *end;
+        for(SQInteger i = 0; i < sepsize; i++)
+        {
+            if(cur == seps[i])
+            {
+                if(!skipempty || (end != start)) {
+                    sq_pushstring(v,start,end-start);
+                    sq_arrayappend(v,-2);
+                }
+                start = end + 1;
+                break;
+            }
+        }
+        end++;
+    }
+    if(end != start)
+    {
+        sq_pushstring(v,start,end-start);
         sq_arrayappend(v,-2);
     }
     return 1;
@@ -513,6 +577,8 @@ static const SQRegFunction stringlib_funcs[]={
     _DECL_FUNC(lstrip,2,_SC(".s")),
     _DECL_FUNC(rstrip,2,_SC(".s")),
     _DECL_FUNC(split,3,_SC(".ss")),
+    _DECL_FUNC(format3_2,-2,_SC(".s")),
+    _DECL_FUNC(split3_2,-3,_SC(".ssb")),
     _DECL_FUNC(escape,2,_SC(".s")),
     _DECL_FUNC(startswith,3,_SC(".ss")),
     _DECL_FUNC(endswith,3,_SC(".ss")),
