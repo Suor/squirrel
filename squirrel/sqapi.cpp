@@ -665,6 +665,11 @@ SQUserPointer sq_getforeignptr(HSQUIRRELVM v)
     return v->_foreignptr;
 }
 
+HSQUIRRELVM sq_getrootvm(HSQUIRRELVM v)
+{
+    return _thread(_ss(v)->_root_vm);
+}
+
 void sq_setsharedforeignptr(HSQUIRRELVM v,SQUserPointer p)
 {
     _ss(v)->_foreignptr = p;

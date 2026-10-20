@@ -217,6 +217,8 @@ SQUIRREL_API SQPRINTFUNCTION sq_geterrorfunc(HSQUIRRELVM v);
 SQUIRREL_API SQRESULT sq_suspendvm(HSQUIRRELVM v);
 SQUIRREL_API SQRESULT sq_wakeupvm(HSQUIRRELVM v,SQBool resumedret,SQBool retval,SQBool raiseerror,SQBool throwerror);
 SQUIRREL_API SQInteger sq_getvmstate(HSQUIRRELVM v);
+/* the VM sq_open made, which v (a thread of it, or itself) shares its state with */
+SQUIRREL_API HSQUIRRELVM sq_getrootvm(HSQUIRRELVM v);
 SQUIRREL_API SQInteger sq_getversion();
 
 /*compiler*/
