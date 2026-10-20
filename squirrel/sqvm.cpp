@@ -13,6 +13,7 @@
 #include "squserdata.h"
 #include "sqarray.h"
 #include "sqclass.h"
+#include "sqnan.h"
 
 #define TOP() (_stack._vals[_top-1])
 #define TARGET _stack._vals[_stackbase+arg0]
@@ -47,7 +48,7 @@ bool SQVM::F32Math() const
 // Float op honouring _f32math: single-precision (exactly like the original 32-bit
 // SQFloat engine) inside flagged functions, full SQFloat precision otherwise.
 #define _FLOAT_OP_(op,o1,o2) \
-    (F32Math() ? (SQFloat)((float)tofloat(o1) op (float)tofloat(o2)) : (tofloat(o1) op tofloat(o2)))
+    sq_x86nan(F32Math() ? (SQFloat)((float)tofloat(o1) op (float)tofloat(o2)) : (tofloat(o1) op tofloat(o2)), tofloat(o1), tofloat(o2))
 
 #define _ARITH_(op,trg,o1,o2) \
 { \
@@ -116,7 +117,7 @@ bool SQVM::ARITH_OP(SQUnsignedInteger op,SQObjectPtr &trg,const SQObjectPtr &o1,
             case '%': res = SQFloat(fmod((double)f1,(double)f2)); break;
             default: res = 0x0f;
             }
-            trg = res; }
+            trg = sq_x86nan(res, f1, f2); }
             break;
         default:
             if(op == '+' && (tmask & _RT_STRING)){

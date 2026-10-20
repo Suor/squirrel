@@ -3,11 +3,12 @@
 #include <math.h>
 #include <stdlib.h>
 #include <sqstdmath.h>
+#include <sqnan.h>
 
 #define SINGLE_ARG_FUNC(_funcname) static SQInteger math_##_funcname(HSQUIRRELVM v){ \
     SQFloat f; \
     sq_getfloat(v,2,&f); \
-    sq_pushfloat(v,(SQFloat)_funcname(f)); \
+    sq_pushfloat(v,sq_x86nan((SQFloat)_funcname(f),f)); \
     return 1; \
 }
 
@@ -15,7 +16,7 @@
     SQFloat p1,p2; \
     sq_getfloat(v,2,&p1); \
     sq_getfloat(v,3,&p2); \
-    sq_pushfloat(v,(SQFloat)_funcname(p1,p2)); \
+    sq_pushfloat(v,sq_x86nan((SQFloat)_funcname(p1,p2),p1,p2)); \
     return 1; \
 }
 
