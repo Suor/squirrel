@@ -48,23 +48,36 @@ struct SQLocalVarInfo
 
 struct SQLineInfo { SQInteger _line;SQInteger _op; };
 
-// A function's debug information, compact: its locals' names, then their positions and
-// live ranges and the line table as varints of zigzagged differences, read back whole
-// when an error, a stack trace or a debugger asks (as SQLocalVarInfo and SQLineInfo, the
-// same values). One allocation: this header, the names, the bytes.
+// A function's debug information, compact: its locals' names, then the line table and
+// their positions and live ranges as varints of zigzagged differences (the same values as
+// SQLineInfo and SQLocalVarInfo), read as a stream where they are looked up and whole when
+// saved. One allocation: this header, the names, the bytes.
 struct SQDebugInfo
 {
     SQInteger _nlocals;
     SQInteger _nlines;
-    SQInteger _nbytes;
+    unsigned int _nbytes;
+    // Where the locals start in Bytes(), after the line table.
+    unsigned int _localsoff : 31;
+    // The line table's ops never decrease (as the compiler almost always emits them), so
+    // a line lookup can stop at the first op past the one it looks for.
+    unsigned int _linessorted : 1;
     SQObjectPtr *Names() { return (SQObjectPtr *)(this + 1); }
     unsigned char *Bytes() { return (unsigned char *)(Names() + _nlocals); }
     static SQDebugInfo *Create(const SQLocalVarInfo *locals, SQInteger nlocals, const SQLineInfo *lines, SQInteger nlines);
     void Release();
-    SQInteger Size() const { return (SQInteger)sizeof(SQDebugInfo) + _nlocals * (SQInteger)sizeof(SQObjectPtr) + _nbytes; }
+    SQInteger Size() const { return (SQInteger)sizeof(SQDebugInfo) + _nlocals * (SQInteger)sizeof(SQObjectPtr) + (SQInteger)_nbytes; }
     // Decode into `out` (_nlocals and _nlines entries).
     void Locals(SQLocalVarInfo *out);
     void Lines(SQLineInfo *out);
+};
+
+// A walk over a function's locals that are alive at an op (SQFunctionProto::NextLocal).
+struct SQLocalCursor
+{
+    SQLocalCursor() : _p(NULL), _i(0) {}
+    const unsigned char *_p;
+    SQInteger _i;
 };
 
 typedef sqvector<SQOuterVar> SQOuterVarVec;
@@ -127,6 +140,9 @@ public:
     }
 
     const SQChar* GetLocal(SQVM *v,SQUnsignedInteger stackbase,SQUnsignedInteger nseq,SQUnsignedInteger nop);
+    // The next local (from `c`, which starts at the first) alive at `nop`: its name and
+    // stack position. False when there are no more.
+    bool NextLocal(SQLocalCursor &c,SQUnsignedInteger nop,const SQObjectPtr *&name,SQUnsignedInteger &pos);
     SQInteger GetLine(SQInstruction *curr);
     // The first entry of the line table (the line the function starts on), or 0.
     SQInteger FirstLine();

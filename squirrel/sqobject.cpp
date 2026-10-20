@@ -260,17 +260,26 @@ SQDebugInfo *SQDebugInfo::Create(const SQLocalVarInfo *locals, SQInteger nlocals
         line = (SQUnsignedInteger)lines[i]._line;
         op = (SQUnsignedInteger)lines[i]._op;
     }
+    SQInteger localsoff = (SQInteger)bytes.size();
+    bool sorted = true;
+    for (SQInteger i = 1; i < nlines; i++)
+        if (lines[i]._op < lines[i - 1]._op) sorted = false;
     for (SQInteger i = 0; i < nlocals; i++) {
         DebugPut(bytes, locals[i]._start_op);
         DebugPut(bytes, locals[i]._end_op - locals[i]._start_op);
         DebugPut(bytes, locals[i]._pos);
     }
     SQInteger nbytes = (SQInteger)bytes.size();
+    // At most 20 bytes a line and 30 a local: a function would need tens of millions of
+    // each to pass 2 GB.
+    assert(nbytes <= 0x7FFFFFFF);
     SQInteger size = (SQInteger)sizeof(SQDebugInfo) + nlocals * (SQInteger)sizeof(SQObjectPtr) + nbytes;
     SQDebugInfo *d = (SQDebugInfo *)SQ_MALLOC(size);
     d->_nlocals = nlocals;
     d->_nlines = nlines;
-    d->_nbytes = nbytes;
+    d->_nbytes = (unsigned int)nbytes;
+    d->_localsoff = (unsigned int)localsoff;
+    d->_linessorted = sorted ? 1 : 0;
     SQObjectPtr *names = d->Names();
     for (SQInteger i = 0; i < nlocals; i++) new (&names[i]) SQObjectPtr(locals[i]._name);
     if (nbytes) memcpy(d->Bytes(), &bytes[0], nbytes);
@@ -287,8 +296,7 @@ void SQDebugInfo::Release()
 
 void SQDebugInfo::Locals(SQLocalVarInfo *out)
 {
-    const unsigned char *p = Bytes();
-    for (SQInteger i = 0; i < _nlines; i++) { DebugGet(p); DebugGet(p); }
+    const unsigned char *p = Bytes() + _localsoff;
     SQObjectPtr *names = Names();
     for (SQInteger i = 0; i < _nlocals; i++) {
         out[i]._name = names[i];
@@ -323,44 +331,67 @@ SQInteger SQFunctionProto::FirstLine()
     return (SQInteger)DebugGet(p);
 }
 
+bool SQFunctionProto::NextLocal(SQLocalCursor &c,SQUnsignedInteger nop,const SQObjectPtr *&name,SQUnsignedInteger &pos)
+{
+    if (!_debuginfo) return false;
+    if (!c._p) c._p = _debuginfo->Bytes() + _debuginfo->_localsoff;
+    while (c._i < _nlocalvarinfos) {
+        SQInteger i = c._i++;
+        SQUnsignedInteger start = DebugGet(c._p);
+        SQUnsignedInteger end = start + DebugGet(c._p);
+        SQUnsignedInteger at = DebugGet(c._p);
+        if (start <= nop && end >= nop) {
+            name = &_debuginfo->Names()[i];
+            pos = at;
+            return true;
+        }
+    }
+    return false;
+}
+
 const SQChar* SQFunctionProto::GetLocal(SQVM *vm,SQUnsignedInteger stackbase,SQUnsignedInteger nseq,SQUnsignedInteger nop)
 {
     SQUnsignedInteger nvars=_nlocalvarinfos;
-    const SQChar *res=NULL;
     if(nvars>=nseq && _debuginfo){
-        sqvector<SQLocalVarInfo> infos;
-        infos.resize(nvars);
-        if (nvars) _debuginfo->Locals(&infos[0]);
-        SQLocalVarInfo *_localvarinfos = nvars ? &infos[0] : NULL;
-        for(SQUnsignedInteger i=0;i<nvars;i++){
-            if(_localvarinfos[i]._start_op<=nop && _localvarinfos[i]._end_op>=nop)
-            {
-                if(nseq==0){
-                    vm->Push(vm->_stack[stackbase+_localvarinfos[i]._pos]);
-                    res=_stringval(_localvarinfos[i]._name);
-                    break;
-                }
-                nseq--;
+        SQLocalCursor c;
+        const SQObjectPtr *name;
+        SQUnsignedInteger pos;
+        while (NextLocal(c, nop, name, pos)) {
+            if (nseq == 0) {
+                vm->Push(vm->_stack[stackbase+pos]);
+                return _stringval(*name);
             }
+            nseq--;
         }
     }
-    return res;
+    return NULL;
 }
 
 
 SQInteger SQFunctionProto::GetLine(SQInstruction *curr)
 {
     if (!_debuginfo || _nlineinfos == 0) return 0;
-    // The line table, decoded: small ones on the stack (most are).
-    SQLineInfo local[256];
-    sqvector<SQLineInfo> big;
-    SQLineInfo *_lineinfos = local;
-    if (_nlineinfos > 256) {
-        big.resize(_nlineinfos);
-        _lineinfos = &big[0];
-    }
-    _debuginfo->Lines(_lineinfos);
     SQInteger op = (SQInteger)(curr-_instructions);
+    if (_debuginfo->_linessorted) {
+        // The line of the last entry before `op` (or the first entry's), as the binary
+        // search below finds it in a sorted table: walked, stopping at the first entry
+        // at or past `op`.
+        const unsigned char *p = _debuginfo->Bytes();
+        SQUnsignedInteger l = DebugGet(p), o = DebugGet(p);
+        SQInteger line = (SQInteger)l;
+        for (SQInteger i = 1; i < _nlineinfos && (SQInteger)o < op; i++) {
+            line = (SQInteger)l;
+            l += DebugGet(p);
+            o += DebugGet(p);
+        }
+        if ((SQInteger)o < op) line = (SQInteger)l;
+        return line;
+    }
+    // A table out of order (rare): decoded whole, searched as upstream does.
+    sqvector<SQLineInfo> infos;
+    infos.resize(_nlineinfos);
+    _debuginfo->Lines(&infos[0]);
+    SQLineInfo *_lineinfos = &infos[0];
     SQInteger line=_lineinfos[0]._line;
     SQInteger low = 0;
     SQInteger high = _nlineinfos - 1;

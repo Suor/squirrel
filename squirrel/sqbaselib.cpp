@@ -108,11 +108,41 @@ static SQInteger base_enabledebuginfo(HSQUIRRELVM v)
     return 0;
 }
 
+// Adds to the table on top what sq_getlocal gives for `level`, seq 0, 1, ... (the outer
+// values, then the locals alive), in one walk of the debug information.
+static void __getlocals(HSQUIRRELVM v,SQUnsignedInteger level)
+{
+    SQUnsignedInteger cstksize=v->_callsstacksize;
+    SQUnsignedInteger lvl=(cstksize-level)-1;
+    SQInteger stackbase=v->_stackbase;
+    if(lvl>=cstksize) return;
+    for(SQUnsignedInteger i=0;i<level;i++){
+        SQVM::CallInfo &ci=v->_callsstack[(cstksize-i)-1];
+        stackbase-=ci._prevstkbase;
+    }
+    SQVM::CallInfo &ci=v->_callsstack[lvl];
+    if(sq_type(ci._closure)!=OT_CLOSURE) return;
+    SQClosure *c=_closure(ci._closure);
+    SQFunctionProto *func=c->_function;
+    for(SQInteger i=0;i<func->_noutervalues;i++){
+        sq_pushstring(v, _stringval(func->_outervalues[i]._name), -1);
+        v->Push(*_outer(c->_outervalues[i])->_valptr);
+        sq_newslot(v, -3, SQFalse);
+    }
+    SQUnsignedInteger nop=(SQUnsignedInteger)((SQInteger)(ci._ip-func->_instructions)-1);
+    SQLocalCursor cur;
+    const SQObjectPtr *name;
+    SQUnsignedInteger pos;
+    while (func->NextLocal(cur, nop, name, pos)) {
+        sq_pushstring(v, _stringval(*name), -1);
+        v->Push(v->_stack[stackbase+pos]);
+        sq_newslot(v, -3, SQFalse);
+    }
+}
+
 static SQInteger __getcallstackinfos(HSQUIRRELVM v,SQInteger level)
 {
     SQStackInfos si;
-    SQInteger seq = 0;
-    const SQChar *name = NULL;
 
     if (SQ_SUCCEEDED(sq_stackinfos(v, level, &si)))
     {
@@ -132,14 +162,7 @@ static SQInteger __getcallstackinfos(HSQUIRRELVM v,SQInteger level)
         sq_newslot(v, -3, SQFalse);
         sq_pushstring(v, _SC("locals"), -1);
         sq_newtable(v);
-        seq=0;
-        while ((name = sq_getlocal(v, level, seq))) {
-            sq_pushstring(v, name, -1);
-            sq_push(v, -2);
-            sq_newslot(v, -4, SQFalse);
-            sq_pop(v, 1);
-            seq++;
-        }
+        __getlocals(v, level);
         sq_newslot(v, -3, SQFalse);
         return 1;
     }
