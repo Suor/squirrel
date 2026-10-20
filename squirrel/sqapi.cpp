@@ -528,6 +528,16 @@ SQRESULT sq_lazyclone(HSQUIRRELVM v,SQInteger idx)
     return SQ_OK;
 }
 
+SQRESULT sq_lazycopy(HSQUIRRELVM v,SQInteger idx)
+{
+    SQObjectPtr &o = stack_get(v,idx);
+    if(sq_type(o) != OT_TABLE)
+        return sq_throwerror(v,_SC("the source is not a table"));
+    SQTable *src = _table(o);
+    v->Push(SQObjectPtr(SQTable::CreateLazy(_ss(v), src, true)));
+    return SQ_OK;
+}
+
 SQRESULT sq_lazybind(HSQUIRRELVM v,SQInteger idx)
 {
     SQObjectPtr &o = stack_get(v,idx);

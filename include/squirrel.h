@@ -253,6 +253,10 @@ SQUIRREL_API SQRESULT sq_bindenv(HSQUIRRELVM v,SQInteger idx);
 /* pushes a lazy clone of the table at idx: a table that behaves as `clone` of it would,
    holding only the slots read or written (see SQTable::_lazy) */
 SQUIRREL_API SQRESULT sq_lazyclone(HSQUIRRELVM v,SQInteger idx);
+/* pushes a lazy copy of the table at idx: as sq_lazyclone, standing for a new table the
+   source's slots were added to one by one in its order (as sq_newtable and sq_newslot
+   over sq_next would make it), with no delegate */
+SQUIRREL_API SQRESULT sq_lazycopy(HSQUIRRELVM v,SQInteger idx);
 /* the lazy table at idx binds its source's closures to the object on top (popped), as
    binding every closure of a clone (sq_bindenv) would, when each is first read */
 SQUIRREL_API SQRESULT sq_lazybind(HSQUIRRELVM v,SQInteger idx);

@@ -12,6 +12,8 @@ void sq_census_get(SQTable *t, const SQObjectPtr &key, const SQObjectPtr &val);
 void sq_census_write(SQTable *t, const SQObjectPtr &key);
 void sq_census_iterate(SQTable *t);
 void sq_census_clone(SQTable *t);
+// A slot added (4) or removed (8) after the table was made, while tracked.
+void sq_census_reshape(SQTable *t, int flag);
 void sq_census_forget(void *o);
 
 #endif //_SQCENSUS_H_

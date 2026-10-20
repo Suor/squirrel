@@ -50,12 +50,19 @@ struct SQTableInjected
 
 // What a lazy table reads through: the version of the table it was made from, the object
 // its inherited closures are bound to (or none), the keys it gained that the source lacks,
-// in the order they came, and the slots it was given (in the order given).
+// in the order they came, and the slots it was given (in the order given). A lazy clone
+// stands for `clone` of its source; a lazy copy (`_copy`) for a new table its source's
+// slots were added to one by one, in the source's order, weak references read through
+// (as a deep copy's top level is made). A clone of an unbound lazy table is another one
+// reading through the same source, holding what that one held: `_marks` are where in
+// `_added` each such clone was made (the table it stands for was cloned there).
 struct SQTableLazy
 {
     SQTableVersion *_src;
+    bool _copy;
     SQWeakRef *_bind;
     sqvector<SQObjectPtr> _added;
+    sqvector<SQUnsignedInteger> _marks;
     sqvector<SQTableInjected> _injected;
 };
 
@@ -112,8 +119,8 @@ private:
     // (bindenv) to _lazy->_bind at the clone, but holds only what was read or written:
     // its own nodes keep the slots written and the bound closures handed out (so a
     // closure is the same object on every read). Anything that needs the whole table
-    // (iteration, clone, delete, clear) first makes it a plain table, laid out as that
-    // clone would be.
+    // (iteration, delete, clear) first makes it a plain table, laid out as that clone
+    // would be; a clone of one whose values aren't bound when read is lazy too.
     SQTableLazy *_lazy;
     // Set while lazy tables read through this one's contents as they are now.
     SQTableVersion *_version;
@@ -126,6 +133,11 @@ private:
     bool _NewSlot(const SQObject &key,const SQObjectPtr &val);
     bool _LazyGet(const SQObjectPtr &key,SQObjectPtr &val);
     bool _LazyHas(const SQObjectPtr &key);
+    void _FillFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger nadded);
+    void _AddFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger from, SQUnsignedInteger to);
+    void _Reclone();
+    static _HashNode *_OwnNode(_HashNode *own, SQInteger ownsize, const SQObject &key);
+    SQTable *_CloneLazy();
     void _DetachVersion();
     void _ReleaseLazy();
     SQTable *_CopyVerbatim();
@@ -138,7 +150,7 @@ public:
         return newtable;
     }
     // A lazy table reading through `src` (see _lazy), its closures not bound.
-    static SQTable* CreateLazy(SQSharedState *ss, SQTable *src);
+    static SQTable* CreateLazy(SQSharedState *ss, SQTable *src, bool copy = false);
     // Binds the closures a lazy table reads from its source to `env` from now on.
     void LazyBind(SQWeakRef *env);
     // Gives a lazy table the slots `keys` (in that order), their values read from `extra`

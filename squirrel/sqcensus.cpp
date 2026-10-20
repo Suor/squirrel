@@ -17,6 +17,7 @@ see copyright notice in squirrel.h
 #include "sqcensus.h"
 #include <unordered_map>
 #include <unordered_set>
+#include <string>
 
 int sq_census_on = 0;
 static int census_enabled = 0;
@@ -24,8 +25,12 @@ static int census_paused = 0;
 
 struct CensusTableTrack
 {
-    int flags; // 1 iterated, 2 cloned
+    // 1 iterated, 2 cloned, 4 a slot added, 8 a slot removed (or cleared), 16 iterated
+    // after a slot was added or removed, 32 cloned after.
+    int flags;
     std::unordered_set<SQRawObjectVal> gets, writes;
+    // Where it was first iterated and first cloned (the script functions on the stack).
+    std::string iterated_at, cloned_at;
 };
 static std::unordered_map<void *, CensusTableTrack> *census_tables;
 static std::unordered_set<void *> *census_fetched;
@@ -38,8 +43,49 @@ void sq_census_get(SQTable *t, const SQObjectPtr &key, const SQObjectPtr &val)
     if (sq_type(val) == OT_CLOSURE || sq_type(val) == OT_NATIVECLOSURE) census_fetched->insert(val._unVal.pRefCounted);
 }
 void sq_census_write(SQTable *t, const SQObjectPtr &key) { (*census_tables)[t].writes.insert(_rawval(key)); }
-void sq_census_iterate(SQTable *t) { (*census_tables)[t].flags |= 1; }
-void sq_census_clone(SQTable *t) { (*census_tables)[t].flags |= 2; }
+// The innermost script functions running (`name@source`, innermost first), or natives.
+static std::string census_site(SQTable *t)
+{
+    std::string site;
+    SQObjectPtr &root = t->_sharedstate->_root_vm;
+    if (sq_type(root) != OT_THREAD) return site;
+    SQVM *v = _thread(root);
+    int n = 0;
+    for (SQInteger i = v->_callsstacksize - 1; i >= 0 && n < 3; i--) {
+        SQObjectPtr &c = v->_callsstack[i]._closure;
+        if (!site.empty()) site += "<";
+        if (sq_type(c) == OT_CLOSURE) {
+            SQFunctionProto *p = _closure(c)->_function;
+            site += sq_type(p->_name) == OT_STRING ? _stringval(p->_name) : "?";
+            site += "@";
+            site += sq_type(p->_sourcename) == OT_STRING ? _stringval(p->_sourcename) : "?";
+            n++;
+        }
+        else if (sq_type(c) == OT_NATIVECLOSURE) {
+            SQObjectPtr &nm = _nativeclosure(c)->_name;
+            site += "native:";
+            site += sq_type(nm) == OT_STRING ? _stringval(nm) : "?";
+        }
+    }
+    if (site.empty()) site = "host";
+    return site;
+}
+
+void sq_census_iterate(SQTable *t)
+{
+    CensusTableTrack &tr = (*census_tables)[t];
+    if (tr.flags & 12) tr.flags |= 16;
+    if (!(tr.flags & 1)) tr.iterated_at = census_site(t);
+    tr.flags |= 1;
+}
+void sq_census_clone(SQTable *t)
+{
+    CensusTableTrack &tr = (*census_tables)[t];
+    if (tr.flags & 12) tr.flags |= 32;
+    if (!(tr.flags & 2)) tr.cloned_at = census_site(t);
+    tr.flags |= 2;
+}
+void sq_census_reshape(SQTable *t, int flag) { (*census_tables)[t].flags |= flag; }
 void sq_census_forget(void *o)
 {
     if (!census_tables) return;
@@ -180,6 +226,8 @@ SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
                 auto it = census_tables->find(t);
                 if (it != census_tables->end()) {
                     if (it->second.flags) fprintf(f, "x %d\n", it->second.flags);
+                    if (!it->second.iterated_at.empty()) fprintf(f, "r %s\n", it->second.iterated_at.c_str());
+                    if (!it->second.cloned_at.empty()) fprintf(f, "q %s\n", it->second.cloned_at.c_str());
                     census_keys(f, "g", it->second.gets, t);
                     census_keys(f, "w", it->second.writes, t);
                 }

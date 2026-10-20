@@ -36,7 +36,7 @@ void SQTable::Remove(const SQObjectPtr &key)
     if (_version) _DetachVersion();
     _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
     if (n) {
-        if (sq_census_on) sq_census_write(this, key);
+        if (sq_census_on) { sq_census_write(this, key); sq_census_reshape(this, 8); }
         n->val.Null();
         n->key.Null();
         _usednodes--;
@@ -93,7 +93,11 @@ void SQTable::Rehash(bool force)
 
 SQTable *SQTable::Clone()
 {
-    if (_lazy) Materialize();
+    if (_lazy) {
+        SQTable *nt = _CloneLazy();
+        if (nt) return nt;
+        Materialize();
+    }
     int census = sq_census_on;
     if (census) sq_census_clone(this);
     sq_census_on = 0;
@@ -140,9 +144,12 @@ bool SQTable::NewSlot(const SQObjectPtr &key,const SQObjectPtr &val)
         }
         _NewSlot(key, val);
         _lazy->_added.push_back(key);
+        if (sq_census_on) sq_census_reshape(this, 4);
         return true;
     }
-    return _NewSlot(key, val);
+    bool added = _NewSlot(key, val);
+    if (added && sq_census_on) sq_census_reshape(this, 4);
+    return added;
 }
 
 bool SQTable::_NewSlot(const SQObject &key,const SQObjectPtr &val)
@@ -256,7 +263,7 @@ void SQTable::Finalize()
 
 void SQTable::Clear()
 {
-    if (sq_census_on) sq_census_iterate(this);
+    if (sq_census_on) { sq_census_iterate(this); sq_census_reshape(this, 8); }
     if (_lazy) Materialize();
     if (_version) _DetachVersion();
     _ClearNodes();
@@ -295,7 +302,7 @@ static bool Bindable(const SQObject &key, const SQObjectPtr &val)
     return sq_type(key) == OT_STRING && (sq_type(val) == OT_CLOSURE || sq_type(val) == OT_NATIVECLOSURE);
 }
 
-SQTable *SQTable::CreateLazy(SQSharedState *ss, SQTable *src)
+SQTable *SQTable::CreateLazy(SQSharedState *ss, SQTable *src, bool copy)
 {
     SQTable *t = Create(ss, 0);
     if (!src->_version) {
@@ -310,8 +317,9 @@ SQTable *SQTable::CreateLazy(SQSharedState *ss, SQTable *src)
     lz->_src = src->_version;
     lz->_src->_refs++;
     lz->_bind = NULL;
+    lz->_copy = copy;
     t->_lazy = lz;
-    t->SetDelegate(src->_delegate);
+    if (!copy) t->SetDelegate(src->_delegate);
     return t;
 }
 
@@ -457,50 +465,35 @@ void SQTable::_DetachVersion()
     __ObjRelease(self);
 }
 
-void SQTable::Materialize()
+// Fills this empty plain table (as Materialize sizes it) with what the lazy table `lz`
+// holding the nodes `own` stands for, up to its first `nadded` added keys, laid out as
+// the clone it stands for would be: the source's slots in the source's order, then the
+// slots it gained since, in the order they came, the ones it was given (LazyInject) where
+// they came.
+void SQTable::_FillFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger nadded)
 {
-    SQTableLazy *lz = _lazy;
-    if (!lz) return;
-    int census = sq_census_on;
-    sq_census_on = 0;
     SQTable *src = lz->_src->_table;
-    if (src->_lazy) src->Materialize();
-    _HashNode *own = _nodes;
-    SQInteger ownsize = _numofnodes;
-    _lazy = NULL;
-    // The clone: the source's slots in its order, in a table of its size.
-    AllocNodes(src->_numofnodes);
-    _usednodes = 0;
     for (SQInteger i = 0; i < src->_numofnodes; i++) {
         _HashNode &sn = src->_nodes[i];
         if (sq_type(sn.key) == OT_NULL) continue;
         SQObject skey = sn.key.Obj();
-        _HashNode *o = &own[HashObj(skey) & (ownsize - 1)];
-        do {
-            if (_rawval(o->key) == _rawval(sn.key) && sq_type(o->key) == sq_type(sn.key)) break;
-        } while ((o = _NextOf(own, o)));
+        _HashNode *o = _OwnNode(own, ownsize, skey);
         if (o) {
             _NewSlot(skey, o->val);
         }
         else {
             SQObjectPtr real = _realval(sn.val);
             if (lz->_bind && Bindable(skey, real)) _NewSlot(skey, BindClosure(real, lz->_bind));
-            else _NewSlot(skey, sn.val);
+            else _NewSlot(skey, lz->_copy ? real : sn.val);
         }
     }
-    // Then the slots it gained since, in the order they came, the ones it was given
-    // (LazyInject) where they came.
-    SQUnsignedInteger nadded = lz->_added.size();
     for (SQUnsignedInteger a = 0; a <= nadded; a++) {
         for (SQUnsignedInteger i = 0; i < lz->_injected.size(); i++) {
             SQTableInjected &inj = lz->_injected[i];
             if (inj._pos != (SQInteger)a) continue;
             for (SQInteger e = 0; e < inj._keys->Size(); e++) {
                 SQObjectPtr &key = inj._keys->_values[e];
-                _HashNode *o = &own[HashObj(key) & (ownsize - 1)];
-                do {
-                    if (_rawval(o->key) == _rawval(key) && sq_type(o->key) == sq_type(key)) break;
-                } while ((o = _NextOf(own, o)));
+                _HashNode *o = _OwnNode(own, ownsize, key);
                 if (o) {
                     _NewSlot(key, o->val);
                     continue;
@@ -512,17 +505,97 @@ void SQTable::Materialize()
             }
         }
         if (a == nadded) break;
+        _AddFrom(lz, own, ownsize, a, a + 1);
+    }
+}
+
+// The node for `key` in the node array `own` of `ownsize`, or NULL.
+SQTable::_HashNode *SQTable::_OwnNode(_HashNode *own, SQInteger ownsize, const SQObject &key)
+{
+    _HashNode *o = &own[HashObj(key) & (ownsize - 1)];
+    do {
+        if (_rawval(o->key) == _rawval(key) && sq_type(o->key) == sq_type(key)) return o;
+    } while ((o = _NextOf(own, o)));
+    return NULL;
+}
+
+// Adds the added keys `from` to `to` of `lz`, with their values in `own`.
+void SQTable::_AddFrom(SQTableLazy *lz, _HashNode *own, SQInteger ownsize, SQUnsignedInteger from, SQUnsignedInteger to)
+{
+    for (SQUnsignedInteger a = from; a < to; a++) {
         SQObjectPtr &key = lz->_added[a];
-        _HashNode *o = &own[HashObj(key) & (ownsize - 1)];
-        do {
-            if (_rawval(o->key) == _rawval(key) && sq_type(o->key) == sq_type(key)) break;
-        } while ((o = _NextOf(own, o)));
+        _HashNode *o = _OwnNode(own, ownsize, key);
         assert(o);
         if (o) _NewSlot(key, o->val);
+    }
+}
+
+// Lays this plain table out again as its clone would be: a table of its size, its slots
+// added in its order.
+void SQTable::_Reclone()
+{
+    _HashNode *old = _nodes;
+    SQInteger oldsize = _numofnodes;
+    AllocNodes(oldsize);
+    _usednodes = 0;
+    for (SQInteger i = 0; i < oldsize; i++)
+        if (sq_type(old[i].key) != OT_NULL) _NewSlot(old[i].key.Obj(), old[i].val);
+    for (SQInteger k = 0; k < oldsize; k++) old[k].~_HashNode();
+    SQ_FREE(old, oldsize * sizeof(_HashNode));
+}
+
+void SQTable::Materialize()
+{
+    SQTableLazy *lz = _lazy;
+    if (!lz) return;
+    int census = sq_census_on;
+    sq_census_on = 0;
+    SQTable *src = lz->_src->_table;
+    if (src->_lazy) src->Materialize();
+    _HashNode *own = _nodes;
+    SQInteger ownsize = _numofnodes;
+    _lazy = NULL;
+    // A clone is made at its source's size; a copy grows from an empty table.
+    AllocNodes(lz->_copy ? MINPOWER2 : src->_numofnodes);
+    _usednodes = 0;
+    SQUnsignedInteger nadded = lz->_added.size();
+    SQUnsignedInteger nmarks = lz->_marks.size();
+    _FillFrom(lz, own, ownsize, nmarks ? lz->_marks[0] : nadded);
+    // Then each clone made since, and the keys added after it.
+    for (SQUnsignedInteger m = 0; m < nmarks; m++) {
+        _Reclone();
+        _AddFrom(lz, own, ownsize, lz->_marks[m], m + 1 < nmarks ? lz->_marks[m + 1] : nadded);
     }
     for (SQInteger k = 0; k < ownsize; k++) own[k].~_HashNode();
     SQ_FREE(own, ownsize * sizeof(_HashNode));
     _lazy = lz;
     _ReleaseLazy();
     sq_census_on = census;
+}
+
+// The clone of a lazy table, itself lazy: it reads through the same source and holds
+// what this one holds. Only where that needs nothing of this one: when no value it would
+// hand out is bound when read (a bound closure is kept by the table, so the clone must
+// hold that same one), it was given no slots and its source isn't lazy itself.
+SQTable *SQTable::_CloneLazy()
+{
+    SQTableLazy *lz = _lazy;
+    SQTable *src = lz->_src->_table;
+    if (lz->_bind || lz->_injected.size() || src->_lazy) return NULL;
+    if (sq_census_on) sq_census_clone(this);
+    SQTable *nt = Create(_opt_ss(this), _usednodes);
+    for (SQInteger i = 0; i < _numofnodes; i++)
+        if (sq_type(_nodes[i].key) != OT_NULL) nt->_NewSlot(_nodes[i].key.Obj(), _nodes[i].val);
+    SQTableLazy *nl = (SQTableLazy *)SQ_MALLOC(sizeof(SQTableLazy));
+    new (nl) SQTableLazy();
+    nl->_src = lz->_src;
+    nl->_src->_refs++;
+    nl->_copy = lz->_copy;
+    nl->_bind = NULL;
+    nl->_added.copy(lz->_added);
+    nl->_marks.copy(lz->_marks);
+    nl->_marks.push_back(lz->_added.size());
+    nt->_lazy = nl;
+    nt->SetDelegate(_delegate);
+    return nt;
 }
