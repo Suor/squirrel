@@ -173,6 +173,24 @@ struct SQCensus
         for (SQUnsignedInteger i = 0; i < st->_numofslots; i++)
             for (SQString *s = st->_strings[i]; s; s = s->_next) out.insert((SQRawObjectVal)s);
     }
+    // The string table's chains: its slots, the longest chain, the strings looked at
+    // finding every string once (the sum of each one's place in its chain), and the
+    // strings sharing a chain with another of the same length (those compare bytes).
+    static void Chains(SQSharedState *ss, SQInteger &slots, SQInteger &longest, SQInteger &probes, SQInteger &samelen)
+    {
+        SQStringTable *st = ss->_stringtable;
+        slots = (SQInteger)st->_numofslots;
+        longest = probes = samelen = 0;
+        for (SQUnsignedInteger i = 0; i < st->_numofslots; i++) {
+            SQInteger n = 0;
+            for (SQString *s = st->_strings[i]; s; s = s->_next) {
+                probes += ++n;
+                for (SQString *o = st->_strings[i]; o; o = o->_next)
+                    if (o != s && o->_len == s->_len) { samelen++; break; }
+            }
+            if (n > longest) longest = n;
+        }
+    }
     static void Strings(SQSharedState *ss, SQInteger &count, SQInteger &bytes)
     {
         SQStringTable *st = ss->_stringtable;
@@ -227,7 +245,10 @@ SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
     SQSharedState *ss = _ss(v);
     SQInteger scount, sbytes;
     SQCensus::Strings(ss, scount, sbytes);
-    fprintf(f, "S %lld %lld\n", (long long)scount, (long long)sbytes);
+    SQInteger slots, longest, probes, samelen;
+    SQCensus::Chains(ss, slots, longest, probes, samelen);
+    fprintf(f, "S %lld %lld %lld %lld %lld %lld\n", (long long)scount, (long long)sbytes, (long long)slots,
+        (long long)longest, (long long)probes, (long long)samelen);
 #ifdef SQ_CENSUS
     // The interned strings, to print tracked keys that are strings by their text.
     std::unordered_set<SQRawObjectVal> strings;
