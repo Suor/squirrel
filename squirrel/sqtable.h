@@ -24,6 +24,7 @@ inline SQHash HashObj(const SQObject &key)
 }
 
 struct SQTable;
+struct SQArray;
 
 // A table's contents frozen for the lazy tables that read through it (see SQTable::_lazy):
 // the table itself until a write to it would change what they see, then a verbatim copy
@@ -34,14 +35,28 @@ struct SQTableVersion
     SQTable *_table;
 };
 
+// Slots a lazy table was given without holding them (sq_lazyinject): as if, after the
+// first `_pos` keys of its `_added`, every key of `_keys` had been added in that order with
+// its value in `_slots` bound to `_bind`. `_slots` and `_keys` are shared by every table
+// given the same slots; each value is bound when first read and kept, as the source's
+// closures are.
+struct SQTableInjected
+{
+    SQTable *_slots;
+    SQArray *_keys;
+    SQWeakRef *_bind;
+    SQInteger _pos;
+};
+
 // What a lazy table reads through: the version of the table it was made from, the object
-// its inherited closures are bound to (or none), and the keys it gained that the source
-// lacks, in the order they came.
+// its inherited closures are bound to (or none), the keys it gained that the source lacks,
+// in the order they came, and the slots it was given (in the order given).
 struct SQTableLazy
 {
     SQTableVersion *_src;
     SQWeakRef *_bind;
     sqvector<SQObjectPtr> _added;
+    sqvector<SQTableInjected> _injected;
 };
 
 struct SQTable : public SQDelegable
@@ -110,6 +125,7 @@ private:
     void _ClearNodes();
     bool _NewSlot(const SQObject &key,const SQObjectPtr &val);
     bool _LazyGet(const SQObjectPtr &key,SQObjectPtr &val);
+    bool _LazyHas(const SQObjectPtr &key);
     void _DetachVersion();
     void _ReleaseLazy();
     SQTable *_CopyVerbatim();
@@ -125,6 +141,10 @@ public:
     static SQTable* CreateLazy(SQSharedState *ss, SQTable *src);
     // Binds the closures a lazy table reads from its source to `env` from now on.
     void LazyBind(SQWeakRef *env);
+    // Gives a lazy table the slots `keys` (in that order), their values read from `extra`
+    // and bound to `env` when first read (see SQTableInjected). `extra` must hold exactly
+    // those keys. False, and nothing done, if the table isn't lazy or has one of the keys.
+    bool LazyInject(SQTable *extra, SQArray *keys, SQWeakRef *env);
     // Makes a lazy table a plain one, laid out as the clone it stands for would be.
     void Materialize();
     bool IsLazy() const { return _lazy != NULL; }
@@ -181,7 +201,7 @@ public:
     bool NewSlot(const SQObjectPtr &key,const SQObjectPtr &val);
     SQInteger Next(bool getweakrefs,const SQObjectPtr &refpos, SQObjectPtr &outkey, SQObjectPtr &outval);
 
-    SQInteger CountUsed(){ return _lazy ? _lazy->_src->_table->CountUsed() + (SQInteger)_lazy->_added.size() : _usednodes;}
+    SQInteger CountUsed();
     void Clear();
     void Release()
     {

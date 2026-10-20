@@ -541,6 +541,22 @@ SQRESULT sq_lazybind(HSQUIRRELVM v,SQInteger idx)
     return SQ_OK;
 }
 
+SQRESULT sq_lazyinject(HSQUIRRELVM v,SQInteger idx)
+{
+    SQObjectPtr o = stack_get(v,idx);
+    SQObjectPtr extra = stack_get(v,-3);
+    SQObjectPtr keys = stack_get(v,-2);
+    SQObjectPtr env = stack_get(v,-1);
+    v->Pop(3);
+    if(sq_type(o) != OT_TABLE || sq_type(extra) != OT_TABLE || sq_type(keys) != OT_ARRAY)
+        return sq_throwerror(v,_SC("expected a table, a table of slots and an array of keys"));
+    if(!sq_istable(env) && !sq_isarray(env) && !sq_isclass(env) && !sq_isinstance(env))
+        return sq_throwerror(v,_SC("invalid environment"));
+    if(!_table(o)->LazyInject(_table(extra), _array(keys), _refcounted(env)->GetWeakRef(sq_type(env))))
+        return sq_throwerror(v,_SC("the table can't be given these slots lazily"));
+    return SQ_OK;
+}
+
 SQRESULT sq_getclosurename(HSQUIRRELVM v,SQInteger idx)
 {
     SQObjectPtr &o = stack_get(v,idx);

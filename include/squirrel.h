@@ -256,6 +256,11 @@ SQUIRREL_API SQRESULT sq_lazyclone(HSQUIRRELVM v,SQInteger idx);
 /* the lazy table at idx binds its source's closures to the object on top (popped), as
    binding every closure of a clone (sq_bindenv) would, when each is first read */
 SQUIRREL_API SQRESULT sq_lazybind(HSQUIRRELVM v,SQInteger idx);
+/* gives the lazy table at idx the slots named by the array at -2, in its order, their
+   values read from the table at -3 (which holds exactly those keys) and bound to the object at -1 when first read, as if
+   each had been bound and added then (all three popped, always); fails if the table isn't
+   lazy or has one of the keys */
+SQUIRREL_API SQRESULT sq_lazyinject(HSQUIRRELVM v,SQInteger idx);
 SQUIRREL_API SQRESULT sq_setf32math(HSQUIRRELVM v,SQInteger idx,SQBool on);
 SQUIRREL_API SQRESULT sq_setclosureroot(HSQUIRRELVM v,SQInteger idx);
 SQUIRREL_API SQRESULT sq_getclosureroot(HSQUIRRELVM v,SQInteger idx);
