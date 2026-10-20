@@ -21,19 +21,18 @@ SQTable::SQTable(SQSharedState *ss,SQInteger nInitialSize)
     AllocNodes(pow2size);
     _usednodes = 0;
     _delegate = NULL;
-    _lazy = NULL;
-    _version = NULL;
+    _ext = 0;
     INIT_CHAIN();
     ADD_TO_CHAIN(&_sharedstate->_gc_chain,this);
 }
 
 void SQTable::Remove(const SQObjectPtr &key)
 {
-    if (_lazy) {
+    if (Lazy()) {
         if (!Has(key)) return;
         Materialize();
     }
-    if (_version) _DetachVersion();
+    if (Version()) _DetachVersion();
     _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
     if (n) {
         SQ_CENSUS_HOOK(sq_census_write(this, key), sq_census_reshape(this, 8));
@@ -48,15 +47,16 @@ void SQTable::AllocNodes(SQInteger nSize)
 {
 #ifdef _SQ64
     static_assert(sizeof(_HashNode) == 32, "a node packs its next index beside its key");
+    static_assert(sizeof(SQTable) == 88, "two 32-bit counts and one word for the lazy parts");
 #endif
-    // A next index is 32 bits (see _HashKey): 4G nodes, 128 GB of them.
-    assert(nSize <= 0xFFFFFFFF);
+    // A count is a 32-bit int (see _numofnodes): 2^30 nodes, 32 GB of them.
+    assert(nSize <= 0x40000000);
     _HashNode *nodes=(_HashNode *)SQ_MALLOC(sizeof(_HashNode)*nSize);
     for(SQInteger i=0;i<nSize;i++){
         _HashNode &n = nodes[i];
         new (&n) _HashNode;
     }
-    _numofnodes=nSize;
+    _numofnodes=(SQInt32)nSize;
     _nodes=nodes;
     _firstfree=&_nodes[_numofnodes-1];
 }
@@ -90,7 +90,7 @@ void SQTable::Rehash(bool force)
 
 SQTable *SQTable::Clone()
 {
-    if (_lazy) {
+    if (Lazy()) {
         SQTable *nt = _CloneLazy();
         if (nt) return nt;
         Materialize();
@@ -115,7 +115,7 @@ bool SQTable::Get(const SQObjectPtr &key,SQObjectPtr &val)
         val = _realval(n->val);
         return true;
     }
-    if (_lazy) return _LazyGet(SQObjectPtr(key), val);
+    if (Lazy()) return _LazyGet(SQObjectPtr(key), val);
     return false;
 }
 
@@ -123,8 +123,8 @@ bool SQTable::NewSlot(const SQObjectPtr &key,const SQObjectPtr &val)
 {
     assert(sq_type(key) != OT_NULL);
     SQ_CENSUS_HOOK(sq_census_write(this, key));
-    if (_version) _DetachVersion();
-    if (_lazy) {
+    if (Version()) _DetachVersion();
+    if (Lazy()) {
         _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
         if (n) {
             n->val = val;
@@ -135,7 +135,7 @@ bool SQTable::NewSlot(const SQObjectPtr &key,const SQObjectPtr &val)
             return false;
         }
         _NewSlot(key, val);
-        _lazy->_added.push_back(key);
+        Lazy()->_added.push_back(key);
         SQ_CENSUS_HOOK(sq_census_reshape(this, 4));
         return true;
     }
@@ -204,7 +204,7 @@ SQInteger SQTable::Next(bool getweakrefs,const SQObjectPtr &refpos, SQObjectPtr 
 {
     SQInteger idx = (SQInteger)TranslateIndex(refpos);
     if (idx == 0) SQ_CENSUS_HOOK(sq_census_iterate(this));
-    if (_lazy) Materialize();
+    if (Lazy()) Materialize();
     while (idx < _numofnodes) {
         if(sq_type(_nodes[idx].key) != OT_NULL) {
             //first found
@@ -223,7 +223,7 @@ SQInteger SQTable::Next(bool getweakrefs,const SQObjectPtr &refpos, SQObjectPtr 
 
 bool SQTable::Set(const SQObjectPtr &key, const SQObjectPtr &val)
 {
-    if (_version) {
+    if (Version()) {
         if (!Has(key)) return false;
         _DetachVersion();
     }
@@ -233,7 +233,7 @@ bool SQTable::Set(const SQObjectPtr &key, const SQObjectPtr &val)
         n->val = val;
         return true;
     }
-    if (_lazy && _LazyHas(key)) {
+    if (Lazy() && _LazyHas(key)) {
         SQ_CENSUS_HOOK(sq_census_write(this, key));
         _NewSlot(key, val);
         return true;
@@ -256,15 +256,15 @@ void SQTable::Finalize()
 void SQTable::Clear()
 {
     SQ_CENSUS_HOOK(sq_census_iterate(this), sq_census_reshape(this, 8));
-    if (_lazy) Materialize();
-    if (_version) _DetachVersion();
+    if (Lazy()) Materialize();
+    if (Version()) _DetachVersion();
     _ClearNodes();
     _usednodes = 0;
     Rehash(true);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Lazy tables (see SQTable::_lazy).
+// Lazy tables (see SQTable::_ext).
 
 // `o` (a closure or a native closure) bound to `env`, as sq_bindenv binds it.
 static SQObjectPtr BindClosure(const SQObjectPtr &o, SQWeakRef *env)
@@ -297,41 +297,41 @@ static bool Bindable(const SQObject &key, const SQObjectPtr &val)
 SQTable *SQTable::CreateLazy(SQSharedState *ss, SQTable *src, bool copy)
 {
     SQTable *t = Create(ss, 0);
-    if (!src->_version) {
+    if (!src->Version()) {
         SQTableVersion *v = (SQTableVersion *)SQ_MALLOC(sizeof(SQTableVersion));
         v->_refs = 0;
         v->_table = src;
         __ObjAddRef(src);
-        src->_version = v;
+        src->SetVersion(v);
     }
     SQTableLazy *lz = (SQTableLazy *)SQ_MALLOC(sizeof(SQTableLazy));
     new (lz) SQTableLazy();
-    lz->_src = src->_version;
+    lz->_src = src->Version();
     lz->_src->_refs++;
     lz->_bind = NULL;
     lz->_copy = copy;
-    t->_lazy = lz;
+    t->SetLazy(lz);
     if (!copy) t->SetDelegate(src->_delegate);
     return t;
 }
 
 void SQTable::LazyBind(SQWeakRef *env)
 {
-    if (!_lazy) return;
+    if (!Lazy()) return;
     __ObjAddRef(env);
-    __ObjRelease(_lazy->_bind);
-    _lazy->_bind = env;
+    __ObjRelease(Lazy()->_bind);
+    Lazy()->_bind = env;
 }
 
 void SQTable::_ReleaseLazy()
 {
-    SQTableLazy *lz = _lazy;
+    SQTableLazy *lz = Lazy();
     if (!lz) return;
-    _lazy = NULL;
+    SetLazy(NULL);
     SQTableVersion *v = lz->_src;
     if (--v->_refs == 0) {
         SQTable *t = v->_table;
-        if (t && t->_version == v) t->_version = NULL;
+        if (t && t->Version() == v) t->SetVersion(NULL);
         SQ_FREE(v, sizeof(SQTableVersion));
         if (t) __ObjRelease(t);
     }
@@ -350,29 +350,31 @@ bool SQTable::Has(const SQObjectPtr &key)
 {
     if (sq_type(key) == OT_NULL) return false;
     if (_Get(key, HashObj(key) & (_numofnodes - 1))) return true;
-    return _lazy && _LazyHas(key);
+    return Lazy() && _LazyHas(key);
 }
 
 // Whether a lazy table has `key` without holding it: its source has it, or it was given it.
 bool SQTable::_LazyHas(const SQObjectPtr &key)
 {
-    if (_lazy->_src->_table->Has(key)) return true;
-    for (SQUnsignedInteger i = 0; i < _lazy->_injected.size(); i++)
-        if (_lazy->_injected[i]._slots->Has(key)) return true;
+    SQTableLazy *lz = Lazy();
+    if (lz->_src->_table->Has(key)) return true;
+    for (SQUnsignedInteger i = 0; i < lz->_injected.size(); i++)
+        if (lz->_injected[i]._slots->Has(key)) return true;
     return false;
 }
 
 SQInteger SQTable::CountUsed()
 {
-    if (!_lazy) return _usednodes;
-    SQInteger n = _lazy->_src->_table->CountUsed() + (SQInteger)_lazy->_added.size();
-    for (SQUnsignedInteger i = 0; i < _lazy->_injected.size(); i++) n += _lazy->_injected[i]._keys->Size();
+    SQTableLazy *lz = Lazy();
+    if (!lz) return _usednodes;
+    SQInteger n = lz->_src->_table->CountUsed() + (SQInteger)lz->_added.size();
+    for (SQUnsignedInteger i = 0; i < lz->_injected.size(); i++) n += lz->_injected[i]._keys->Size();
     return n;
 }
 
 bool SQTable::LazyInject(SQTable *extra, SQArray *keys, SQWeakRef *env)
 {
-    if (!_lazy || extra->IsLazy()) return false;
+    if (!Lazy() || extra->IsLazy()) return false;
     // `extra` holds exactly the keys, each once: a key it holds is a key this table has.
     if (extra->CountUsed() != keys->Size()) return false;
     for (SQInteger i = 0; i < keys->Size(); i++) {
@@ -382,8 +384,8 @@ bool SQTable::LazyInject(SQTable *extra, SQArray *keys, SQWeakRef *env)
             if (_rawval(keys->_values[j]) == _rawval(k) && sq_type(keys->_values[j]) == sq_type(k)) return false;
     }
     // Lazy tables reading through this one keep it as it is; that makes it a plain table.
-    if (_version) _DetachVersion();
-    if (!_lazy) return false;
+    if (Version()) _DetachVersion();
+    if (!Lazy()) return false;
     SQTableInjected inj;
     inj._slots = extra;
     __ObjAddRef(extra);
@@ -391,23 +393,24 @@ bool SQTable::LazyInject(SQTable *extra, SQArray *keys, SQWeakRef *env)
     __ObjAddRef(keys);
     inj._bind = env;
     if (env) __ObjAddRef(env);
-    inj._pos = (SQInteger)_lazy->_added.size();
-    inj._nmarks = _lazy->_marks.size();
-    _lazy->_injected.push_back(inj);
+    inj._pos = (SQInteger)Lazy()->_added.size();
+    inj._nmarks = Lazy()->_marks.size();
+    Lazy()->_injected.push_back(inj);
     return true;
 }
 
 // `key` is a copy: the caller's may be `val` itself.
 bool SQTable::_LazyGet(const SQObjectPtr &key, SQObjectPtr &val)
 {
-    SQWeakRef *bind = _lazy->_bind;
-    if (!_lazy->_src->_table->Get(key, val)) {
+    SQTableLazy *lz = Lazy();
+    SQWeakRef *bind = lz->_bind;
+    if (!lz->_src->_table->Get(key, val)) {
         SQUnsignedInteger i = 0;
-        for (; i < _lazy->_injected.size(); i++) {
-            if (_lazy->_injected[i]._slots->Get(key, val)) break;
+        for (; i < lz->_injected.size(); i++) {
+            if (lz->_injected[i]._slots->Get(key, val)) break;
         }
-        if (i == _lazy->_injected.size()) return false;
-        bind = _lazy->_injected[i]._bind;
+        if (i == lz->_injected.size()) return false;
+        bind = lz->_injected[i]._bind;
     }
     if (bind && Bindable(key, val)) {
         // Bound once and kept: the same closure on every read, as in the clone.
@@ -422,7 +425,7 @@ bool SQTable::_LazyGet(const SQObjectPtr &key, SQObjectPtr &val)
 // gives what this table would.
 SQTable *SQTable::_CopyVerbatim()
 {
-    if (_lazy) Materialize();
+    if (Lazy()) Materialize();
     SQTable *nt = Create(_opt_ss(this), _numofnodes);
     _HashNode *basesrc = _nodes;
     _HashNode *basedst = nt->_nodes;
@@ -441,12 +444,12 @@ SQTable *SQTable::_CopyVerbatim()
 // copy of it as it is.
 void SQTable::_DetachVersion()
 {
-    SQTableVersion *v = _version;
+    SQTableVersion *v = Version();
     SQTable *copy = _CopyVerbatim();
     __ObjAddRef(copy);
     v->_table = copy;
-    copy->_version = v;
-    _version = NULL;
+    copy->SetVersion(v);
+    SetVersion(NULL);
     // The version's reference to this table goes; whoever is writing to it holds another.
     SQTable *self = this;
     __ObjRelease(self);
@@ -537,15 +540,15 @@ void SQTable::_Reclone()
 
 void SQTable::Materialize()
 {
-    SQTableLazy *lz = _lazy;
+    SQTableLazy *lz = Lazy();
     if (!lz) return;
     // Its own reads (of the slots it was given) aren't the scripts'.
     SQ_CENSUS_PAUSE();
     SQTable *src = lz->_src->_table;
-    if (src->_lazy) src->Materialize();
+    if (src->Lazy()) src->Materialize();
     _HashNode *own = _nodes;
     SQInteger ownsize = _numofnodes;
-    _lazy = NULL;
+    SetLazy(NULL);
     // A clone is made at its source's size; a copy grows from an empty table.
     AllocNodes(lz->_copy ? MINPOWER2 : src->_numofnodes);
     _usednodes = 0;
@@ -560,7 +563,7 @@ void SQTable::Materialize()
     }
     for (SQInteger k = 0; k < ownsize; k++) own[k].~_HashNode();
     SQ_FREE(own, ownsize * sizeof(_HashNode));
-    _lazy = lz;
+    SetLazy(lz);
     _ReleaseLazy();
     SQ_CENSUS_RESUME();
 }
@@ -571,9 +574,9 @@ void SQTable::Materialize()
 // hold that same one), it was given no slots and its source isn't lazy itself.
 SQTable *SQTable::_CloneLazy()
 {
-    SQTableLazy *lz = _lazy;
+    SQTableLazy *lz = Lazy();
     SQTable *src = lz->_src->_table;
-    if (lz->_bind || lz->_injected.size() || src->_lazy) return NULL;
+    if (lz->_bind || lz->_injected.size() || src->Lazy()) return NULL;
     SQ_CENSUS_HOOK(sq_census_clone(this));
     SQTable *nt = Create(_opt_ss(this), _usednodes);
     for (SQInteger i = 0; i < _numofnodes; i++)
@@ -587,7 +590,7 @@ SQTable *SQTable::_CloneLazy()
     nl->_added.copy(lz->_added);
     nl->_marks.copy(lz->_marks);
     nl->_marks.push_back(lz->_added.size());
-    nt->_lazy = nl;
+    nt->SetLazy(nl);
     nt->SetDelegate(_delegate);
     return nt;
 }

@@ -26,7 +26,7 @@ inline SQHash HashObj(const SQObject &key)
 struct SQTable;
 struct SQArray;
 
-// A table's contents frozen for the lazy tables that read through it (see SQTable::_lazy):
+// A table's contents frozen for the lazy tables that read through it (see SQTable::_ext):
 // the table itself until a write to it would change what they see, then a verbatim copy
 // made at that write. Reference counted by the lazy tables.
 struct SQTableVersion
@@ -66,6 +66,8 @@ struct SQTableLazy
     sqvector<SQObjectPtr> _added;
     sqvector<SQUnsignedInteger> _marks;
     sqvector<SQTableInjected> _injected;
+    // The version lazy tables reading through this one read (see SQTable::_ext).
+    SQTableVersion *_version;
 };
 
 struct SQTable : public SQDelegable
@@ -115,17 +117,39 @@ private:
     static inline void _SetNext(_HashNode *base, _HashNode *n, const _HashNode *next) { n->key._next = next ? (unsigned int)(next - base) + 1 : 0; }
     _HashNode *_firstfree;
     _HashNode *_nodes;
-    SQInteger _numofnodes;
-    SQInteger _usednodes;
+    // 32 bits each (a table is 88 bytes, not 104): at most 2^30 nodes, 32 GB of them.
+    SQInt32 _numofnodes;
+    SQInt32 _usednodes;
+    // What a lazy table reads through (Lazy()), and the version lazy tables reading
+    // through this one read (Version()), in one word, since a table seldom has both:
+    // 0, a SQTableLazy (holding the version, if any), or a SQTableVersion with bit 0 set.
+    //
     // A lazy table behaves exactly as a clone of its source whose closures were bound
-    // (bindenv) to _lazy->_bind at the clone, but holds only what was read or written:
+    // (bindenv) to Lazy()->_bind at the clone, but holds only what was read or written:
     // its own nodes keep the slots written and the bound closures handed out (so a
     // closure is the same object on every read). Anything that needs the whole table
     // (iteration, delete, clear) first makes it a plain table, laid out as that clone
     // would be; a clone of one whose values aren't bound when read is lazy too.
-    SQTableLazy *_lazy;
-    // Set while lazy tables read through this one's contents as they are now.
-    SQTableVersion *_version;
+    //
+    // A version is set while lazy tables read through this one's contents as they are now.
+    SQUnsignedInteger _ext;
+    SQTableLazy *Lazy() const { return (_ext & 1) ? NULL : (SQTableLazy *)_ext; }
+    SQTableVersion *Version() const
+    {
+        if (_ext & 1) return (SQTableVersion *)(_ext - 1);
+        return _ext ? ((SQTableLazy *)_ext)->_version : NULL;
+    }
+    void SetLazy(SQTableLazy *lz)
+    {
+        SQTableVersion *v = Version();
+        if (lz) { lz->_version = v; _ext = (SQUnsignedInteger)lz; }
+        else _ext = v ? (SQUnsignedInteger)v | 1 : 0;
+    }
+    void SetVersion(SQTableVersion *v)
+    {
+        if (SQTableLazy *lz = Lazy()) lz->_version = v;
+        else _ext = v ? (SQUnsignedInteger)v | 1 : 0;
+    }
 
 ///////////////////////////
     void AllocNodes(SQInteger nSize);
@@ -152,7 +176,7 @@ public:
         newtable->_delegate = NULL;
         return newtable;
     }
-    // A lazy table reading through `src` (see _lazy), its closures not bound.
+    // A lazy table reading through `src` (see _ext), its closures not bound.
     static SQTable* CreateLazy(SQSharedState *ss, SQTable *src, bool copy = false);
     // Binds the closures a lazy table reads from its source to `env` from now on.
     void LazyBind(SQWeakRef *env);
@@ -162,7 +186,7 @@ public:
     bool LazyInject(SQTable *extra, SQArray *keys, SQWeakRef *env);
     // Makes a lazy table a plain one, laid out as the clone it stands for would be.
     void Materialize();
-    bool IsLazy() const { return _lazy != NULL; }
+    bool IsLazy() const { return Lazy() != NULL; }
     // Whether the table has `key`, without reading it (no closure is bound).
     bool Has(const SQObjectPtr &key);
     void Finalize();
@@ -171,7 +195,7 @@ public:
     {
         SQ_CENSUS_FORGET(this);
         _ReleaseLazy();
-        if (_version) _version->_table = NULL;
+        if (SQTableVersion *v = Version()) v->_table = NULL;
         SetDelegate(NULL);
         REMOVE_FROM_CHAIN(&_sharedstate->_gc_chain, this);
         for (SQInteger i = 0; i < _numofnodes; i++) _nodes[i].~_HashNode();

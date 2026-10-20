@@ -753,11 +753,12 @@ void SQTable::Mark(SQCollectable **chain)
 {
     START_MARK()
         if(_delegate) _delegate->Mark(chain);
-        if(_lazy && _lazy->_src->_table) _lazy->_src->_table->Mark(chain);
-        if(_lazy) {
-            for(SQUnsignedInteger i = 0; i < _lazy->_injected.size(); i++) {
-                _lazy->_injected[i]._slots->Mark(chain);
-                _lazy->_injected[i]._keys->Mark(chain);
+        SQTableLazy *lz = Lazy();
+        if(lz && lz->_src->_table) lz->_src->_table->Mark(chain);
+        if(lz) {
+            for(SQUnsignedInteger i = 0; i < lz->_injected.size(); i++) {
+                lz->_injected[i]._slots->Mark(chain);
+                lz->_injected[i]._keys->Mark(chain);
             }
         }
         SQInteger len = _numofnodes;

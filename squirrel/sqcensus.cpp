@@ -144,14 +144,14 @@ struct SQCensus
     {
         SQInteger nodes = TableNodes(t);
         SQInteger extra = 0;
-        if (t->_lazy) extra += sizeof(SQTableLazy) + t->_lazy->_added.capacity() * sizeof(SQObjectPtr);
-        if (t->_version) extra += sizeof(SQTableVersion);
+        if (t->Lazy()) extra += sizeof(SQTableLazy) + t->Lazy()->_added.capacity() * sizeof(SQObjectPtr);
+        if (t->Version()) extra += sizeof(SQTableVersion);
         fprintf(f, "T %p %lld %lld %lld %p %d\n", (void *)t,
             (long long)(sizeof(SQTable) + nodes * TableNodeSize() + extra), (long long)nodes,
             (long long)t->_usednodes, (void *)t->_delegate, weak);
-        if (t->_lazy)
-            fprintf(f, "L %p %p %lld\n", (void *)t->_lazy->_src->_table, census_env(t->_lazy->_bind),
-                (long long)t->_lazy->_added.size());
+        if (t->Lazy())
+            fprintf(f, "L %p %p %lld\n", (void *)t->Lazy()->_src->_table, census_env(t->Lazy()->_bind),
+                (long long)t->Lazy()->_added.size());
     }
     // A table's own slots (a lazy table's are only what it holds), without iterating it.
     static void Slots(FILE *f, SQTable *t)
