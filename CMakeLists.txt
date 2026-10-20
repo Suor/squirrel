@@ -20,7 +20,9 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
 set(CMAKE_CXX_STANDARD 11)
 
-if(CMAKE_COMPILER_IS_GNUCXX)
+# GCC, Clang and AppleClang alike: the VM type-puns (-fno-strict-aliasing) and uses
+# neither exceptions nor RTTI.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(
     "$<$<COMPILE_LANGUAGE:CXX>:-fno-rtti;-fno-exceptions>"
     -fno-strict-aliasing
@@ -31,7 +33,7 @@ if(CMAKE_COMPILER_IS_GNUCXX)
     "$<$<CONFIG:Release>:-O3>"
     "$<$<CONFIG:RelWithDebInfo>:-O3;-g>"
     "$<$<CONFIG:MinSizeRel>:-Os>"
-    "$<$<CONFIG:Debug>:-pg;-pie;-gstabs;-g3;-Og>"
+    "$<$<CONFIG:Debug>:-g3;-Og>"
     )
 elseif(MSVC)
   set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
