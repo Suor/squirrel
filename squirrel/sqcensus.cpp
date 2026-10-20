@@ -19,6 +19,7 @@ see copyright notice in squirrel.h
 #include <unordered_set>
 #include <string>
 
+#ifdef SQ_CENSUS
 int sq_census_on = 0;
 static int census_enabled = 0;
 static int census_paused = 0;
@@ -97,12 +98,14 @@ void sq_census_forget(void *o)
 void sq_censustrack(HSQUIRRELVM v, SQInteger mode)
 {
     (void)v;
-    if (!census_tables) {
-        census_tables = new std::unordered_map<void *, CensusTableTrack>();
-        census_fetched = new std::unordered_set<void *>();
-    }
     switch (mode) {
-    case 1: census_tables->clear(); census_fetched->clear(); census_enabled = 1; census_paused = 0; break;
+    case 1:
+        // Made when first started, so pausing and resuming alone costs nothing.
+        if (!census_tables) {
+            census_tables = new std::unordered_map<void *, CensusTableTrack>();
+            census_fetched = new std::unordered_set<void *>();
+        }
+        census_tables->clear(); census_fetched->clear(); census_enabled = 1; census_paused = 0; break;
     case 0: census_enabled = 0; break;
     case 2: census_paused++; break;
     case 3: if (census_paused > 0) census_paused--; break;
@@ -110,8 +113,26 @@ void sq_censustrack(HSQUIRRELVM v, SQInteger mode)
     census_update();
 }
 
-static void census_keys(FILE *f, const char *tag, const std::unordered_set<SQRawObjectVal> &keys, SQTable *t);
-static std::unordered_set<SQRawObjectVal> *census_strings;
+#else
+// Built without access tracking: nothing to track.
+void sq_censustrack(HSQUIRRELVM v, SQInteger mode) { (void)v; (void)mode; }
+#endif
+
+// Whether a table read handed out this closure while tracked.
+static int census_was_fetched(void *o)
+{
+#ifdef SQ_CENSUS
+    return census_fetched && census_fetched->count(o) ? 1 : 0;
+#else
+    (void)o;
+    return 0;
+#endif
+}
+
+#ifdef SQ_CENSUS
+static void census_keys(FILE *f, const char *tag, const std::unordered_set<SQRawObjectVal> &keys, SQTable *t,
+    const std::unordered_set<SQRawObjectVal> &strings);
+#endif
 
 static void census_value(FILE *f, const SQObject &o);
 static void *census_env(SQWeakRef *env);
@@ -207,9 +228,11 @@ SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
     SQInteger scount, sbytes;
     SQCensus::Strings(ss, scount, sbytes);
     fprintf(f, "S %lld %lld\n", (long long)scount, (long long)sbytes);
+#ifdef SQ_CENSUS
+    // The interned strings, to print tracked keys that are strings by their text.
     std::unordered_set<SQRawObjectVal> strings;
-    SQCensus::StringSet(ss, strings);
-    census_strings = &strings;
+    if (census_tables) SQCensus::StringSet(ss, strings);
+#endif
     fprintf(f, "Z table=%d node=%lld closure=%d nclosure=%d array=%d proto=%d weakref=%d outer=%d string=%d\n",
         (int)sizeof(SQTable), (long long)SQCensus::TableNodeSize(), (int)sizeof(SQClosure),
         (int)sizeof(SQNativeClosure), (int)sizeof(SQArray), (int)sizeof(SQFunctionProto),
@@ -220,6 +243,7 @@ SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
         case OT_TABLE: {
             SQTable *t = (SQTable *)c;
             SQCensus::Header(f, t, weak);
+#ifdef SQ_CENSUS
             int on = sq_census_on;
             sq_census_on = 0;
             if (census_tables) {
@@ -228,12 +252,13 @@ SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
                     if (it->second.flags) fprintf(f, "x %d\n", it->second.flags);
                     if (!it->second.iterated_at.empty()) fprintf(f, "r %s\n", it->second.iterated_at.c_str());
                     if (!it->second.cloned_at.empty()) fprintf(f, "q %s\n", it->second.cloned_at.c_str());
-                    census_keys(f, "g", it->second.gets, t);
-                    census_keys(f, "w", it->second.writes, t);
+                    census_keys(f, "g", it->second.gets, t, strings);
+                    census_keys(f, "w", it->second.writes, t, strings);
                 }
             }
-            SQCensus::Slots(f, t);
             sq_census_on = on;
+#endif
+            SQCensus::Slots(f, t);
             break;
         }
         case OT_ARRAY: {
@@ -248,7 +273,7 @@ SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
             SQFunctionProto *p = cl->_function;
             fprintf(f, "C %p %lld %p %p %lld %lld %d %d\n", (void *)cl, (long long)_CALC_CLOSURE_SIZE(p),
                 (void *)p, census_env(cl->_env), (long long)p->_noutervalues, (long long)p->_ndefaultparams, weak,
-                census_fetched && census_fetched->count(cl) ? 1 : 0);
+                census_was_fetched(cl));
             break;
         }
         case OT_NATIVECLOSURE: {
@@ -256,7 +281,7 @@ SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
             fprintf(f, "N %p %lld %p %lld %d %d ", (void *)nc,
                 (long long)(_CALC_NATVIVECLOSURE_SIZE(nc->_noutervalues) + nc->_typecheck.capacity() * sizeof(SQInteger)),
                 census_env(nc->_env), (long long)nc->_noutervalues, weak,
-                census_fetched && census_fetched->count(nc) ? 1 : 0);
+                census_was_fetched(nc));
             census_value(f, nc->_name);
             fputc('\n', f);
             break;
@@ -301,18 +326,19 @@ SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
             break;
         }
     }
-    census_strings = NULL;
     fclose(f);
     return SQ_OK;
 }
 
+#ifdef SQ_CENSUS
 // A tracked table's keys: strings by their text, others by their raw value.
-static void census_keys(FILE *f, const char *tag, const std::unordered_set<SQRawObjectVal> &keys, SQTable *t)
+static void census_keys(FILE *f, const char *tag, const std::unordered_set<SQRawObjectVal> &keys, SQTable *t,
+    const std::unordered_set<SQRawObjectVal> &strings)
 {
     (void)t;
     for (SQRawObjectVal k : keys) {
         fprintf(f, "%s ", tag);
-        if (census_strings && census_strings->count(k)) {
+        if (strings.count(k)) {
             SQString *str = (SQString *)k;
             fputc('s', f);
             census_escape(f, str->_val, str->_len);
@@ -321,3 +347,4 @@ static void census_keys(FILE *f, const char *tag, const std::unordered_set<SQRaw
         fputc('\n', f);
     }
 }
+#endif

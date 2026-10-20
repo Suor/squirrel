@@ -26,7 +26,7 @@ public:
         return nc;
     }
     void Release(){
-        sq_census_forget(this);
+        SQ_CENSUS_FORGET(this);
         SQFunctionProto *f = _function;
         SQInteger size = _CALC_CLOSURE_SIZE(f);
         _DESTRUCT_VECTOR(SQObjectPtr,f->_noutervalues,_outervalues);

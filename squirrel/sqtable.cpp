@@ -36,7 +36,7 @@ void SQTable::Remove(const SQObjectPtr &key)
     if (_version) _DetachVersion();
     _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
     if (n) {
-        if (sq_census_on) { sq_census_write(this, key); sq_census_reshape(this, 8); }
+        SQ_CENSUS_HOOK(sq_census_write(this, key), sq_census_reshape(this, 8));
         n->val.Null();
         n->key.Null();
         _usednodes--;
@@ -78,14 +78,11 @@ void SQTable::Rehash(bool force)
     else
         return;
     _usednodes = 0;
-    int census = sq_census_on;
-    sq_census_on = 0;
     for (SQInteger i=0; i<oldsize; i++) {
         _HashNode *old = nold+i;
         if (sq_type(old->key) != OT_NULL)
             _NewSlot(old->key.Obj(),old->val);
     }
-    sq_census_on = census;
     for(SQInteger k=0;k<oldsize;k++)
         nold[k].~_HashNode();
     SQ_FREE(nold,oldsize*sizeof(_HashNode));
@@ -98,7 +95,7 @@ SQTable *SQTable::Clone()
         if (nt) return nt;
         Materialize();
     }
-    if (sq_census_on) sq_census_clone(this);
+    SQ_CENSUS_HOOK(sq_census_clone(this));
     // The slots in node order, as iterating would give them (weak references kept).
     SQTable *nt=Create(_opt_ss(this),_numofnodes);
     for (SQInteger i = 0; i < _numofnodes; i++)
@@ -114,7 +111,7 @@ bool SQTable::Get(const SQObjectPtr &key,SQObjectPtr &val)
     _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
     if (n) {
         // `key` and `val` may be the same object (sq_rawget).
-        if (sq_census_on) sq_census_get(this, key, n->val);
+        SQ_CENSUS_HOOK(sq_census_get(this, key, n->val));
         val = _realval(n->val);
         return true;
     }
@@ -125,7 +122,7 @@ bool SQTable::Get(const SQObjectPtr &key,SQObjectPtr &val)
 bool SQTable::NewSlot(const SQObjectPtr &key,const SQObjectPtr &val)
 {
     assert(sq_type(key) != OT_NULL);
-    if (sq_census_on) sq_census_write(this, key);
+    SQ_CENSUS_HOOK(sq_census_write(this, key));
     if (_version) _DetachVersion();
     if (_lazy) {
         _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
@@ -139,11 +136,11 @@ bool SQTable::NewSlot(const SQObjectPtr &key,const SQObjectPtr &val)
         }
         _NewSlot(key, val);
         _lazy->_added.push_back(key);
-        if (sq_census_on) sq_census_reshape(this, 4);
+        SQ_CENSUS_HOOK(sq_census_reshape(this, 4));
         return true;
     }
     bool added = _NewSlot(key, val);
-    if (added && sq_census_on) sq_census_reshape(this, 4);
+    if (added) SQ_CENSUS_HOOK(sq_census_reshape(this, 4));
     return added;
 }
 
@@ -206,7 +203,7 @@ bool SQTable::_NewSlot(const SQObject &key,const SQObjectPtr &val)
 SQInteger SQTable::Next(bool getweakrefs,const SQObjectPtr &refpos, SQObjectPtr &outkey, SQObjectPtr &outval)
 {
     SQInteger idx = (SQInteger)TranslateIndex(refpos);
-    if (sq_census_on && idx == 0) sq_census_iterate(this);
+    if (idx == 0) SQ_CENSUS_HOOK(sq_census_iterate(this));
     if (_lazy) Materialize();
     while (idx < _numofnodes) {
         if(sq_type(_nodes[idx].key) != OT_NULL) {
@@ -232,12 +229,12 @@ bool SQTable::Set(const SQObjectPtr &key, const SQObjectPtr &val)
     }
     _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
     if (n) {
-        if (sq_census_on) sq_census_write(this, key);
+        SQ_CENSUS_HOOK(sq_census_write(this, key));
         n->val = val;
         return true;
     }
     if (_lazy && _LazyHas(key)) {
-        if (sq_census_on) sq_census_write(this, key);
+        SQ_CENSUS_HOOK(sq_census_write(this, key));
         _NewSlot(key, val);
         return true;
     }
@@ -258,7 +255,7 @@ void SQTable::Finalize()
 
 void SQTable::Clear()
 {
-    if (sq_census_on) { sq_census_iterate(this); sq_census_reshape(this, 8); }
+    SQ_CENSUS_HOOK(sq_census_iterate(this), sq_census_reshape(this, 8));
     if (_lazy) Materialize();
     if (_version) _DetachVersion();
     _ClearNodes();
@@ -415,12 +412,9 @@ bool SQTable::_LazyGet(const SQObjectPtr &key, SQObjectPtr &val)
     if (bind && Bindable(key, val)) {
         // Bound once and kept: the same closure on every read, as in the clone.
         val = BindClosure(val, bind);
-        int census = sq_census_on;
-        sq_census_on = 0;
         _NewSlot(key, val);
-        sq_census_on = census;
     }
-    if (sq_census_on) sq_census_get(this, key, val);
+    SQ_CENSUS_HOOK(sq_census_get(this, key, val));
     return true;
 }
 
@@ -448,10 +442,7 @@ SQTable *SQTable::_CopyVerbatim()
 void SQTable::_DetachVersion()
 {
     SQTableVersion *v = _version;
-    int census = sq_census_on;
-    sq_census_on = 0;
     SQTable *copy = _CopyVerbatim();
-    sq_census_on = census;
     __ObjAddRef(copy);
     v->_table = copy;
     copy->_version = v;
@@ -548,8 +539,8 @@ void SQTable::Materialize()
 {
     SQTableLazy *lz = _lazy;
     if (!lz) return;
-    int census = sq_census_on;
-    sq_census_on = 0;
+    // Its own reads (of the slots it was given) aren't the scripts'.
+    SQ_CENSUS_PAUSE();
     SQTable *src = lz->_src->_table;
     if (src->_lazy) src->Materialize();
     _HashNode *own = _nodes;
@@ -571,7 +562,7 @@ void SQTable::Materialize()
     SQ_FREE(own, ownsize * sizeof(_HashNode));
     _lazy = lz;
     _ReleaseLazy();
-    sq_census_on = census;
+    SQ_CENSUS_RESUME();
 }
 
 // The clone of a lazy table, itself lazy: it reads through the same source and holds
@@ -583,7 +574,7 @@ SQTable *SQTable::_CloneLazy()
     SQTableLazy *lz = _lazy;
     SQTable *src = lz->_src->_table;
     if (lz->_bind || lz->_injected.size() || src->_lazy) return NULL;
-    if (sq_census_on) sq_census_clone(this);
+    SQ_CENSUS_HOOK(sq_census_clone(this));
     SQTable *nt = Create(_opt_ss(this), _usednodes);
     for (SQInteger i = 0; i < _numofnodes; i++)
         if (sq_type(_nodes[i].key) != OT_NULL) nt->_NewSlot(_nodes[i].key.Obj(), _nodes[i].val);

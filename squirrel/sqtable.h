@@ -169,7 +169,7 @@ public:
     SQTable *Clone();
     ~SQTable()
     {
-        sq_census_forget(this);
+        SQ_CENSUS_FORGET(this);
         _ReleaseLazy();
         if (_version) _version->_table = NULL;
         SetDelegate(NULL);
