@@ -338,7 +338,11 @@ bool SQVM::ToString(const SQObjectPtr &o,SQObjectPtr &res)
             }
         }
     default:
-        scsprintf(_sp(sq_rsl((sizeof(void*)*2)+NUMBER_MAX_CHAR)),sq_rsl((sizeof(void*)*2)+NUMBER_MAX_CHAR),_SC("(%s : 0x%p)"),GetTypeName(o),(void*)_rawval(o));
+        // The original engine (MSVC) prints a pointer as fixed-width uppercase hex
+        // with no prefix of its own ("(table : 0x0C1A2B30)"); glibc's %p adds "0x"
+        // and drops leading zeros. Print the MSVC shape on every platform, the whole
+        // 64-bit pointer (16 digits), so the text stays unique per live object.
+        scsprintf(_sp(sq_rsl((sizeof(void*)*2)+NUMBER_MAX_CHAR)),sq_rsl((sizeof(void*)*2)+NUMBER_MAX_CHAR),_SC("(%s : 0x%016llX)"),GetTypeName(o),(unsigned long long)(size_t)_rawval(o));
     }
     res = SQString::Create(_ss(this),_spval);
     return true;
