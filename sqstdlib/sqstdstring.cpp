@@ -146,7 +146,16 @@ SQRESULT sqstd_format(HSQUIRRELVM v,SQInteger nformatstringidx,SQInteger *outlen
             switch(valtype) {
             case 's': i += scsprintf(&dest[i],allocated,fmt,ts); break;
             case 'i': i += scsprintf(&dest[i],allocated,fmt,ti); break;
-            case 'f': i += scsprintf(&dest[i],allocated,fmt,tf); break;
+            case 'f': {
+                /* our own formatter, not the C library's: the original's MSVC CRT
+                   output on every platform (half-away rounding, "-nan(ind)") */
+                SQInteger flen = sq_formatfloat(NULL,0,fmt,tf);
+                if(flen < 0) return sq_throwerror(v,_SC("invalid format"));
+                allocated += flen*sizeof(SQChar);
+                dest = sq_getscratchpad(v,allocated);
+                i += sq_formatfloat(&dest[i],flen+1,fmt,tf);
+                break;
+                }
             };
             nparam ++;
         }

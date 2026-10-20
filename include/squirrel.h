@@ -251,6 +251,10 @@ SQUIRREL_API SQRESULT sq_setclosureroot(HSQUIRRELVM v,SQInteger idx);
 SQUIRREL_API SQRESULT sq_getclosureroot(HSQUIRRELVM v,SQInteger idx);
 SQUIRREL_API void sq_pushstring(HSQUIRRELVM v,const SQChar *s,SQInteger len);
 SQUIRREL_API void sq_pushfloat(HSQUIRRELVM v,SQFloat f);
+/* printf-style "%[-+ #0][width][.prec](e|E|f|g|G)" of f, as the original engine's
+   MSVC UCRT writes it, independent of the platform C library (snprintf semantics:
+   returns the full length, -1 for a bad spec) */
+SQUIRREL_API SQInteger sq_formatfloat(SQChar *buf,SQInteger bufsize,const SQChar *spec,SQFloat f);
 SQUIRREL_API void sq_pushinteger(HSQUIRRELVM v,SQInteger n);
 SQUIRREL_API void sq_pushbool(HSQUIRRELVM v,SQBool b);
 SQUIRREL_API void sq_pushuserpointer(HSQUIRRELVM v,SQUserPointer p);

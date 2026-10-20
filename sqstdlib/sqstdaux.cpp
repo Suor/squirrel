@@ -44,8 +44,12 @@ void sqstd_printcallstack(HSQUIRRELVM v)
                     pf(v,_SC("[%s] %d\n"),name,i);
                     break;
                 case OT_FLOAT:
+                    {
+                    SQChar fbuf[64];
                     sq_getfloat(v,-1,&f);
-                    pf(v,_SC("[%s] %.14g\n"),name,f);
+                    sq_formatfloat(fbuf,64,_SC("%.14g"),f);
+                    pf(v,_SC("[%s] %s\n"),name,fbuf);
+                    }
                     break;
                 case OT_USERPOINTER:
                     pf(v,_SC("[%s] USERPOINTER\n"),name);
