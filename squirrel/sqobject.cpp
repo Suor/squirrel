@@ -218,11 +218,120 @@ void SQArray::Extend(const SQArray *a){
             Append(a->_values[i]);
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Compact debug information (see SQDebugInfo).
+
+static inline SQUnsignedInteger DebugZig(SQUnsignedInteger d)
+{
+    return (d << 1) ^ (SQUnsignedInteger)((SQInteger)d >> (sizeof(SQInteger) * 8 - 1));
+}
+static inline SQUnsignedInteger DebugUnzig(SQUnsignedInteger z)
+{
+    return (z >> 1) ^ (SQUnsignedInteger)0 - (z & 1);
+}
+static void DebugPut(sqvector<unsigned char> &out, SQUnsignedInteger d)
+{
+    SQUnsignedInteger z = DebugZig(d);
+    while (z >= 0x80) { out.push_back((unsigned char)(z | 0x80)); z >>= 7; }
+    out.push_back((unsigned char)z);
+}
+static SQUnsignedInteger DebugGet(const unsigned char *&p)
+{
+    SQUnsignedInteger z = 0;
+    int shift = 0;
+    for (;;) {
+        unsigned char b = *p++;
+        z |= (SQUnsignedInteger)(b & 0x7f) << shift;
+        if (!(b & 0x80)) break;
+        shift += 7;
+    }
+    return DebugUnzig(z);
+}
+
+SQDebugInfo *SQDebugInfo::Create(const SQLocalVarInfo *locals, SQInteger nlocals, const SQLineInfo *lines, SQInteger nlines)
+{
+    // Differences wrap around, so every value comes back exactly.
+    // The line table first: GetLine reads only it.
+    sqvector<unsigned char> bytes;
+    SQUnsignedInteger line = 0, op = 0;
+    for (SQInteger i = 0; i < nlines; i++) {
+        DebugPut(bytes, (SQUnsignedInteger)lines[i]._line - line);
+        DebugPut(bytes, (SQUnsignedInteger)lines[i]._op - op);
+        line = (SQUnsignedInteger)lines[i]._line;
+        op = (SQUnsignedInteger)lines[i]._op;
+    }
+    for (SQInteger i = 0; i < nlocals; i++) {
+        DebugPut(bytes, locals[i]._start_op);
+        DebugPut(bytes, locals[i]._end_op - locals[i]._start_op);
+        DebugPut(bytes, locals[i]._pos);
+    }
+    SQInteger nbytes = (SQInteger)bytes.size();
+    SQInteger size = (SQInteger)sizeof(SQDebugInfo) + nlocals * (SQInteger)sizeof(SQObjectPtr) + nbytes;
+    SQDebugInfo *d = (SQDebugInfo *)SQ_MALLOC(size);
+    d->_nlocals = nlocals;
+    d->_nlines = nlines;
+    d->_nbytes = nbytes;
+    SQObjectPtr *names = d->Names();
+    for (SQInteger i = 0; i < nlocals; i++) new (&names[i]) SQObjectPtr(locals[i]._name);
+    if (nbytes) memcpy(d->Bytes(), &bytes[0], nbytes);
+    return d;
+}
+
+void SQDebugInfo::Release()
+{
+    SQInteger size = Size();
+    SQObjectPtr *names = Names();
+    for (SQInteger i = 0; i < _nlocals; i++) names[i].~SQObjectPtr();
+    SQ_FREE(this, size);
+}
+
+void SQDebugInfo::Locals(SQLocalVarInfo *out)
+{
+    const unsigned char *p = Bytes();
+    for (SQInteger i = 0; i < _nlines; i++) { DebugGet(p); DebugGet(p); }
+    SQObjectPtr *names = Names();
+    for (SQInteger i = 0; i < _nlocals; i++) {
+        out[i]._name = names[i];
+        out[i]._start_op = DebugGet(p);
+        out[i]._end_op = out[i]._start_op + DebugGet(p);
+        out[i]._pos = DebugGet(p);
+    }
+}
+
+void SQDebugInfo::Lines(SQLineInfo *out)
+{
+    const unsigned char *p = Bytes();
+    SQUnsignedInteger line = 0, op = 0;
+    for (SQInteger i = 0; i < _nlines; i++) {
+        line += DebugGet(p);
+        op += DebugGet(p);
+        out[i]._line = (SQInteger)line;
+        out[i]._op = (SQInteger)op;
+    }
+}
+
+void SQFunctionProto::SetDebugInfo(const SQLocalVarInfo *locals, const SQLineInfo *lines)
+{
+    if (_debuginfo) _debuginfo->Release();
+    _debuginfo = SQDebugInfo::Create(locals, _nlocalvarinfos, lines, _nlineinfos);
+}
+
+SQInteger SQFunctionProto::FirstLine()
+{
+    if (!_debuginfo || _nlineinfos == 0) return 0;
+    const unsigned char *p = _debuginfo->Bytes();
+    return (SQInteger)DebugGet(p);
+}
+
 const SQChar* SQFunctionProto::GetLocal(SQVM *vm,SQUnsignedInteger stackbase,SQUnsignedInteger nseq,SQUnsignedInteger nop)
 {
     SQUnsignedInteger nvars=_nlocalvarinfos;
     const SQChar *res=NULL;
-    if(nvars>=nseq){
+    if(nvars>=nseq && _debuginfo){
+        sqvector<SQLocalVarInfo> infos;
+        infos.resize(nvars);
+        if (nvars) _debuginfo->Locals(&infos[0]);
+        SQLocalVarInfo *_localvarinfos = nvars ? &infos[0] : NULL;
         for(SQUnsignedInteger i=0;i<nvars;i++){
             if(_localvarinfos[i]._start_op<=nop && _localvarinfos[i]._end_op>=nop)
             {
@@ -241,6 +350,16 @@ const SQChar* SQFunctionProto::GetLocal(SQVM *vm,SQUnsignedInteger stackbase,SQU
 
 SQInteger SQFunctionProto::GetLine(SQInstruction *curr)
 {
+    if (!_debuginfo || _nlineinfos == 0) return 0;
+    // The line table, decoded: small ones on the stack (most are).
+    SQLineInfo local[256];
+    sqvector<SQLineInfo> big;
+    SQLineInfo *_lineinfos = local;
+    if (_nlineinfos > 256) {
+        big.resize(_nlineinfos);
+        _lineinfos = &big[0];
+    }
+    _debuginfo->Lines(_lineinfos);
     SQInteger op = (SQInteger)(curr-_instructions);
     SQInteger line=_lineinfos[0]._line;
     SQInteger low = 0;
@@ -447,9 +566,18 @@ bool SQFunctionProto::Save(SQVM *v,SQUserPointer up,SQWRITEFUNC write)
         _CHECK_IO(WriteObject(v,up,write,_outervalues[i]._name));
     }
 
+    // The debug information is written as it always was (whole structures).
+    sqvector<SQLocalVarInfo> localvarinfos;
+    sqvector<SQLineInfo> lineinfos;
+    localvarinfos.resize(nlocalvarinfos);
+    lineinfos.resize(nlineinfos);
+    if (_debuginfo) {
+        if (nlocalvarinfos) _debuginfo->Locals(&localvarinfos[0]);
+        if (nlineinfos) _debuginfo->Lines(&lineinfos[0]);
+    }
     _CHECK_IO(WriteTag(v,write,up,SQ_CLOSURESTREAM_PART));
     for(i=0;i<nlocalvarinfos;i++){
-        SQLocalVarInfo &lvi=_localvarinfos[i];
+        SQLocalVarInfo &lvi=localvarinfos[i];
         _CHECK_IO(WriteObject(v,up,write,lvi._name));
         _CHECK_IO(SafeWrite(v,write,up,&lvi._pos,sizeof(SQUnsignedInteger)));
         _CHECK_IO(SafeWrite(v,write,up,&lvi._start_op,sizeof(SQUnsignedInteger)));
@@ -457,7 +585,7 @@ bool SQFunctionProto::Save(SQVM *v,SQUserPointer up,SQWRITEFUNC write)
     }
 
     _CHECK_IO(WriteTag(v,write,up,SQ_CLOSURESTREAM_PART));
-    _CHECK_IO(SafeWrite(v,write,up,_lineinfos,sizeof(SQLineInfo)*nlineinfos));
+    if (nlineinfos) _CHECK_IO(SafeWrite(v,write,up,&lineinfos[0],sizeof(SQLineInfo)*nlineinfos));
 
     _CHECK_IO(WriteTag(v,write,up,SQ_CLOSURESTREAM_PART));
     _CHECK_IO(SafeWrite(v,write,up,_defaultparams,sizeof(SQInteger)*ndefaultparams));
@@ -527,16 +655,21 @@ bool SQFunctionProto::Load(SQVM *v,SQUserPointer up,SQREADFUNC read,SQObjectPtr 
     }
     _CHECK_IO(CheckTag(v,read,up,SQ_CLOSURESTREAM_PART));
 
+    sqvector<SQLocalVarInfo> localvarinfos;
+    sqvector<SQLineInfo> lineinfos;
+    localvarinfos.resize(nlocalvarinfos);
+    lineinfos.resize(nlineinfos);
     for(i = 0; i < nlocalvarinfos; i++){
         SQLocalVarInfo lvi;
         _CHECK_IO(ReadObject(v, up, read, lvi._name));
         _CHECK_IO(SafeRead(v,read,up, &lvi._pos, sizeof(SQUnsignedInteger)));
         _CHECK_IO(SafeRead(v,read,up, &lvi._start_op, sizeof(SQUnsignedInteger)));
         _CHECK_IO(SafeRead(v,read,up, &lvi._end_op, sizeof(SQUnsignedInteger)));
-        f->_localvarinfos[i] = lvi;
+        localvarinfos[i] = lvi;
     }
     _CHECK_IO(CheckTag(v,read,up,SQ_CLOSURESTREAM_PART));
-    _CHECK_IO(SafeRead(v,read,up, f->_lineinfos, sizeof(SQLineInfo)*nlineinfos));
+    if (nlineinfos) _CHECK_IO(SafeRead(v,read,up, &lineinfos[0], sizeof(SQLineInfo)*nlineinfos));
+    f->SetDebugInfo(nlocalvarinfos ? &localvarinfos[0] : NULL, nlineinfos ? &lineinfos[0] : NULL);
 
     _CHECK_IO(CheckTag(v,read,up,SQ_CLOSURESTREAM_PART));
     _CHECK_IO(SafeRead(v,read,up, f->_defaultparams, sizeof(SQInteger)*ndefaultparams));

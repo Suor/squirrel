@@ -264,8 +264,8 @@ SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
         case OT_FUNCPROTO: {
             SQFunctionProto *p = (SQFunctionProto *)c;
             fprintf(f, "F %p %lld %lld %lld %lld %lld %lld %lld %lld %lld ", (void *)p,
-                (long long)_FUNC_SIZE(p->_ninstructions, p->_nliterals, p->_nparameters, p->_nfunctions,
-                    p->_noutervalues, p->_nlineinfos, p->_nlocalvarinfos, p->_ndefaultparams),
+                (long long)(_FUNC_SIZE(p->_ninstructions, p->_nliterals, p->_nparameters, p->_nfunctions,
+                    p->_noutervalues, p->_ndefaultparams) + (p->_debuginfo ? p->_debuginfo->Size() : 0)),
                 (long long)p->_ninstructions, (long long)p->_nliterals, (long long)p->_nparameters,
                 (long long)p->_nfunctions, (long long)p->_noutervalues, (long long)p->_nlineinfos,
                 (long long)p->_nlocalvarinfos, (long long)p->_ndefaultparams);
@@ -273,6 +273,7 @@ SQRESULT sq_census(HSQUIRRELVM v, const SQChar *path)
             fputc(' ', f);
             census_value(f, p->_sourcename);
             fputc('\n', f);
+            if (p->_debuginfo) fprintf(f, "G %lld\n", (long long)p->_debuginfo->Size());
             break;
         }
         case OT_OUTER:

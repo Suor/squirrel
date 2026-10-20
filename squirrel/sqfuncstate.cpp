@@ -147,8 +147,11 @@ void SQFuncState::Dump(SQFunctionProto *func)
         n++;
     }
     scprintf(_SC("-----LOCALS\n"));
+    sqvector<SQLocalVarInfo> locals;
+    locals.resize(func->_nlocalvarinfos);
+    if (func->_debuginfo && func->_nlocalvarinfos) func->_debuginfo->Locals(&locals[0]);
     for(si=0;si<func->_nlocalvarinfos;si++){
-        SQLocalVarInfo lvi=func->_localvarinfos[si];
+        SQLocalVarInfo lvi=locals[si];
         scprintf(_SC("[%d] %s \t%d %d\n"), (SQInt32)lvi._pos,_stringval(lvi._name), (SQInt32)lvi._start_op, (SQInt32)lvi._end_op);
         n++;
     }
@@ -612,8 +615,7 @@ SQFunctionProto *SQFuncState::BuildProto()
     for(SQUnsignedInteger nf = 0; nf < _functions.size(); nf++) f->_functions[nf] = _functions[nf];
     for(SQUnsignedInteger np = 0; np < _parameters.size(); np++) f->_parameters[np] = _parameters[np];
     for(SQUnsignedInteger no = 0; no < _outervalues.size(); no++) f->_outervalues[no] = _outervalues[no];
-    for(SQUnsignedInteger nl = 0; nl < _localvarinfos.size(); nl++) f->_localvarinfos[nl] = _localvarinfos[nl];
-    for(SQUnsignedInteger ni = 0; ni < _lineinfos.size(); ni++) f->_lineinfos[ni] = _lineinfos[ni];
+    f->SetDebugInfo(_localvarinfos.size() ? &_localvarinfos[0] : NULL, _lineinfos.size() ? &_lineinfos[0] : NULL);
     for(SQUnsignedInteger nd = 0; nd < _defaultparams.size(); nd++) f->_defaultparams[nd] = _defaultparams[nd];
 
     memcpy(f->_instructions,&_instructions[0],_instructions.size()*sizeof(SQInstruction));

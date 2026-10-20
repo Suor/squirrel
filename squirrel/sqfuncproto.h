@@ -48,15 +48,34 @@ struct SQLocalVarInfo
 
 struct SQLineInfo { SQInteger _line;SQInteger _op; };
 
+// A function's debug information, compact: its locals' names, then their positions and
+// live ranges and the line table as varints of zigzagged differences, read back whole
+// when an error, a stack trace or a debugger asks (as SQLocalVarInfo and SQLineInfo, the
+// same values). One allocation: this header, the names, the bytes.
+struct SQDebugInfo
+{
+    SQInteger _nlocals;
+    SQInteger _nlines;
+    SQInteger _nbytes;
+    SQObjectPtr *Names() { return (SQObjectPtr *)(this + 1); }
+    unsigned char *Bytes() { return (unsigned char *)(Names() + _nlocals); }
+    static SQDebugInfo *Create(const SQLocalVarInfo *locals, SQInteger nlocals, const SQLineInfo *lines, SQInteger nlines);
+    void Release();
+    SQInteger Size() const { return (SQInteger)sizeof(SQDebugInfo) + _nlocals * (SQInteger)sizeof(SQObjectPtr) + _nbytes; }
+    // Decode into `out` (_nlocals and _nlines entries).
+    void Locals(SQLocalVarInfo *out);
+    void Lines(SQLineInfo *out);
+};
+
 typedef sqvector<SQOuterVar> SQOuterVarVec;
 typedef sqvector<SQLocalVarInfo> SQLocalVarInfoVec;
 typedef sqvector<SQLineInfo> SQLineInfoVec;
 
-#define _FUNC_SIZE(ni,nl,nparams,nfuncs,nouters,nlineinf,localinf,defparams) (sizeof(SQFunctionProto) \
+// The debug information (line and local infos) is held apart, compact (SQDebugInfo).
+#define _FUNC_SIZE(ni,nl,nparams,nfuncs,nouters,defparams) (sizeof(SQFunctionProto) \
         +((ni-1)*sizeof(SQInstruction))+(nl*sizeof(SQObjectPtr)) \
         +(nparams*sizeof(SQObjectPtr))+(nfuncs*sizeof(SQObjectPtr)) \
-        +(nouters*sizeof(SQOuterVar))+(nlineinf*sizeof(SQLineInfo)) \
-        +(localinf*sizeof(SQLocalVarInfo))+(defparams*sizeof(SQInteger)))
+        +(nouters*sizeof(SQOuterVar))+(defparams*sizeof(SQInteger)))
 
 
 struct SQFunctionProto : public CHAINABLE_OBJ
@@ -73,7 +92,7 @@ public:
     {
         SQFunctionProto *f;
         //I compact the whole class and members in a single memory allocation
-        f = (SQFunctionProto *)sq_vm_malloc(_FUNC_SIZE(ninstructions,nliterals,nparameters,nfunctions,noutervalues,nlineinfos,nlocalvarinfos,ndefaultparams));
+        f = (SQFunctionProto *)sq_vm_malloc(_FUNC_SIZE(ninstructions,nliterals,nparameters,nfunctions,noutervalues,ndefaultparams));
         new (f) SQFunctionProto(ss);
         f->_ninstructions = ninstructions;
         f->_literals = (SQObjectPtr*)&f->_instructions[ninstructions];
@@ -84,19 +103,16 @@ public:
         f->_nfunctions = nfunctions;
         f->_outervalues = (SQOuterVar*)&f->_functions[nfunctions];
         f->_noutervalues = noutervalues;
-        f->_lineinfos = (SQLineInfo *)&f->_outervalues[noutervalues];
         f->_nlineinfos = nlineinfos;
-        f->_localvarinfos = (SQLocalVarInfo *)&f->_lineinfos[nlineinfos];
         f->_nlocalvarinfos = nlocalvarinfos;
-        f->_defaultparams = (SQInteger *)&f->_localvarinfos[nlocalvarinfos];
+        f->_debuginfo = NULL;
+        f->_defaultparams = (SQInteger *)&f->_outervalues[noutervalues];
         f->_ndefaultparams = ndefaultparams;
 
         _CONSTRUCT_VECTOR(SQObjectPtr,f->_nliterals,f->_literals);
         _CONSTRUCT_VECTOR(SQObjectPtr,f->_nparameters,f->_parameters);
         _CONSTRUCT_VECTOR(SQObjectPtr,f->_nfunctions,f->_functions);
         _CONSTRUCT_VECTOR(SQOuterVar,f->_noutervalues,f->_outervalues);
-        //_CONSTRUCT_VECTOR(SQLineInfo,f->_nlineinfos,f->_lineinfos); //not required are 2 integers
-        _CONSTRUCT_VECTOR(SQLocalVarInfo,f->_nlocalvarinfos,f->_localvarinfos);
         return f;
     }
     void Release(){
@@ -104,15 +120,18 @@ public:
         _DESTRUCT_VECTOR(SQObjectPtr,_nparameters,_parameters);
         _DESTRUCT_VECTOR(SQObjectPtr,_nfunctions,_functions);
         _DESTRUCT_VECTOR(SQOuterVar,_noutervalues,_outervalues);
-        //_DESTRUCT_VECTOR(SQLineInfo,_nlineinfos,_lineinfos); //not required are 2 integers
-        _DESTRUCT_VECTOR(SQLocalVarInfo,_nlocalvarinfos,_localvarinfos);
-        SQInteger size = _FUNC_SIZE(_ninstructions,_nliterals,_nparameters,_nfunctions,_noutervalues,_nlineinfos,_nlocalvarinfos,_ndefaultparams);
+        if (_debuginfo) _debuginfo->Release();
+        SQInteger size = _FUNC_SIZE(_ninstructions,_nliterals,_nparameters,_nfunctions,_noutervalues,_ndefaultparams);
         this->~SQFunctionProto();
         sq_vm_free(this,size);
     }
 
     const SQChar* GetLocal(SQVM *v,SQUnsignedInteger stackbase,SQUnsignedInteger nseq,SQUnsignedInteger nop);
     SQInteger GetLine(SQInstruction *curr);
+    // The first entry of the line table (the line the function starts on), or 0.
+    SQInteger FirstLine();
+    // Sets the debug information, `_nlocalvarinfos` locals and `_nlineinfos` lines.
+    void SetDebugInfo(const SQLocalVarInfo *locals, const SQLineInfo *lines);
     bool Save(SQVM *v,SQUserPointer up,SQWRITEFUNC write);
     static bool Load(SQVM *v,SQUserPointer up,SQREADFUNC read,SQObjectPtr &ret);
 #ifndef NO_GARBAGE_COLLECTOR
@@ -131,10 +150,8 @@ public:
     SQInteger _varparams;
 
     SQInteger _nlocalvarinfos;
-    SQLocalVarInfo *_localvarinfos;
-
     SQInteger _nlineinfos;
-    SQLineInfo *_lineinfos;
+    SQDebugInfo *_debuginfo;
 
     SQInteger _nliterals;
     SQObjectPtr *_literals;
