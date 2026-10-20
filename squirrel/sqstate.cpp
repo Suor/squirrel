@@ -584,10 +584,11 @@ void SQStringTable::AllocNodes(SQInteger size)
 
 SQString* SQStringTable::Concat(const SQChar* a, SQInteger alen, const SQChar* b, SQInteger blen)
 {
-    SQHash newhash = ::_hashstr2(a, alen, b, blen);
-    SQHash h = newhash & (_numofslots - 1);
-    SQString* s;
     SQInteger len = alen + blen;
+    SQHash newhash = ::_hashstr2(a, alen, b, blen);
+    newhash = _hashpack(newhash, len < SQ_HASHSTR_WHOLE ? (unsigned int)newhash : ::_hashintern2(a, alen, b, blen));
+    SQHash h = _hashinterned(newhash) & (_numofslots - 1);
+    SQString* s;
     for (s = _strings[h]; s; s = s->_next) {
         if (s->_len == len) {
             if ((!memcmp(a, s->_val, sq_rsl(alen)))
@@ -610,7 +611,7 @@ SQString* SQStringTable::Concat(const SQChar* a, SQInteger alen, const SQChar* b
     _slotused++;
 #ifdef _DEBUG
     SQHash old_newhash = ::_hashstr(t->_val, t->_len);
-    assert(old_newhash == newhash);
+    assert(old_newhash == _hashtables(newhash));
 #endif
     if (_slotused > _numofslots)  /* too crowded? */
         Resize(_numofslots * 2);
@@ -622,7 +623,8 @@ SQString *SQStringTable::Add(const SQChar *news,SQInteger len)
     if(len<0)
         len = (SQInteger)scstrlen(news);
     SQHash newhash = ::_hashstr(news,len);
-    SQHash h = newhash&(_numofslots-1);
+    newhash = _hashpack(newhash, len < SQ_HASHSTR_WHOLE ? (unsigned int)newhash : ::_hashintern(news, len));
+    SQHash h = _hashinterned(newhash)&(_numofslots-1);
     SQString *s;
     for (s = _strings[h]; s; s = s->_next){
         if(s->_len == len && (!memcmp(news,s->_val,sq_rsl(len))))
@@ -653,7 +655,7 @@ void SQStringTable::Resize(SQInteger size)
         SQString *p = oldtable[i];
         while(p){
             SQString *next = p->_next;
-            SQHash h = p->_hash&(_numofslots-1);
+            SQHash h = _hashinterned(p->_hash)&(_numofslots-1);
             p->_next = _strings[h];
             _strings[h] = p;
             p = next;
@@ -666,7 +668,7 @@ void SQStringTable::Remove(SQString *bs)
 {
     SQString *s;
     SQString *prev=NULL;
-    SQHash h = bs->_hash&(_numofslots - 1);
+    SQHash h = _hashinterned(bs->_hash)&(_numofslots - 1);
 
     for (s = _strings[h]; s; ){
         if(s == bs){
