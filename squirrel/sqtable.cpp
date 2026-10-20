@@ -98,17 +98,12 @@ SQTable *SQTable::Clone()
         if (nt) return nt;
         Materialize();
     }
-    int census = sq_census_on;
-    if (census) sq_census_clone(this);
-    sq_census_on = 0;
+    if (sq_census_on) sq_census_clone(this);
+    // The slots in node order, as iterating would give them (weak references kept).
     SQTable *nt=Create(_opt_ss(this),_numofnodes);
-    SQInteger ridx=0;
-    SQObjectPtr key,val;
-    while((ridx=Next(true,ridx,key,val))!=-1){
-        nt->NewSlot(key,val);
-    }
+    for (SQInteger i = 0; i < _numofnodes; i++)
+        if (sq_type(_nodes[i].key) != OT_NULL) nt->_NewSlot(_nodes[i].key.Obj(), _nodes[i].val);
     nt->SetDelegate(_delegate);
-    sq_census_on = census;
     return nt;
 }
 
