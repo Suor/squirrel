@@ -97,6 +97,13 @@ SQWeakRef *SQRefCounted::GetWeakRef(SQObjectType type)
 #endif
         _weakref->_obj._type = type;
         _weakref->_obj._unVal.pRefCounted = this;
+#ifndef NO_GARBAGE_COLLECTOR
+        // A weak reference could tell that bindenv's cache keeps the closure alive.
+        if(type == OT_CLOSURE) {
+            SQClosure *c = static_cast<SQClosure *>(this);
+            _ss(c)->ForgetBound(c);
+        }
+#endif
     }
     return _weakref;
 }
@@ -425,6 +432,9 @@ SQInteger SQFunctionProto::GetLine(SQInstruction *curr)
 
 SQClosure::~SQClosure()
 {
+#ifndef NO_GARBAGE_COLLECTOR
+    _ss(this)->ForgetBindSource(this);
+#endif
     __ObjRelease(_root);
     __ObjRelease(_env);
     __ObjRelease(_base);

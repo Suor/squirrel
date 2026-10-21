@@ -155,8 +155,35 @@ void SQSharedState::Init()
     _weakref_default_delegate = CreateDefaultDelegate(this,_weakref_default_delegate_funcz);
 }
 
+#ifndef NO_GARBAGE_COLLECTOR
+void SQSharedState::FlushBindCache()
+{
+    for(SQInteger i = 0; i < SQ_BINDCACHE_SIZE; i++) {
+        _bindcache[i]._src = NULL;
+        _bindcache[i]._bound.Null();
+    }
+}
+#endif
+
+#ifndef NO_GARBAGE_COLLECTOR
+// `bound` gets a weak reference: the cache must not hold it, or the reference could tell.
+// (Whoever asks for the reference holds it, so it outlives this.)
+void SQSharedState::ForgetBound(const SQClosure *bound)
+{
+    for(SQInteger i = 0; i < SQ_BINDCACHE_SIZE; i++) {
+        if(sq_type(_bindcache[i]._bound) == OT_CLOSURE && _closure(_bindcache[i]._bound) == bound) {
+            _bindcache[i]._src = NULL;
+            _bindcache[i]._bound.Null();
+        }
+    }
+}
+#endif
+
 SQSharedState::~SQSharedState()
 {
+#ifndef NO_GARBAGE_COLLECTOR
+    FlushBindCache();
+#endif
     if(_releasehook) { _releasehook(_foreignptr,0); _releasehook = NULL; }
     _constructoridx.Null();
     _table(_registry)->Finalize();
@@ -270,6 +297,8 @@ SQInteger SQSharedState::ResurrectUnreachable(SQVM *vm)
     SQInteger n=0;
     SQCollectable *tchain=NULL;
 
+    FlushBindCache();
+
     RunMark(vm,&tchain);
 
     SQCollectable *resurrected = _gc_chain;
@@ -323,6 +352,8 @@ SQInteger SQSharedState::CollectGarbage(SQVM *vm)
 {
     SQInteger n = 0;
     SQCollectable *tchain = NULL;
+
+    FlushBindCache();
 
     RunMark(vm,&tchain);
 

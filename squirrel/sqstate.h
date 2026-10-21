@@ -57,6 +57,20 @@ private:
 #define REMOVE_STRING(ss,bstr) ss->_stringtable->Remove(bstr)
 
 struct SQObjectPtr;
+struct SQClosure;
+
+#ifndef NO_GARBAGE_COLLECTOR
+// The closures sq_bindenv made last, by the closure they were bound from: one is handed
+// out again for the same binding once nothing but this cache holds it (see sq_bindenv).
+// Emptied before every collection and at close, so it never keeps an object alive that
+// would otherwise have been freed by then.
+#define SQ_BINDCACHE_SIZE 64
+struct SQBindCacheEntry
+{
+    SQClosure *_src; // not held: its destructor clears the entry
+    SQObjectPtr _bound;
+};
+#endif
 
 struct SQSharedState
 {
@@ -71,6 +85,15 @@ public:
     void RunMark(SQVM *vm,SQCollectable **tchain);
     SQInteger ResurrectUnreachable(SQVM *vm);
     static void MarkObject(const SQObject &o,SQCollectable **chain);
+    static SQUnsignedInteger BindCacheSlot(const SQClosure *src) {
+        return (SQUnsignedInteger)((((unsigned long long)(size_t)src) * 0x9E3779B97F4A7C15ULL) >> 58) & (SQ_BINDCACHE_SIZE - 1);
+    }
+    void FlushBindCache();
+    void ForgetBound(const SQClosure *bound);
+    void ForgetBindSource(const SQClosure *src) {
+        SQBindCacheEntry &e = _bindcache[BindCacheSlot(src)];
+        if(e._src == src) { e._src = NULL; e._bound.Null(); }
+    }
 #endif
     SQObjectPtrVec *_metamethods;
     SQObjectPtr _metamethodsmap;
@@ -113,6 +136,10 @@ public:
     bool _notifyallexceptions;
     SQUserPointer _foreignptr;
     SQRELEASEHOOK _releasehook;
+#ifndef NO_GARBAGE_COLLECTOR
+    // Last, after the members the VM reads all the time.
+    SQBindCacheEntry _bindcache[SQ_BINDCACHE_SIZE];
+#endif
 private:
     SQChar *_scratchpad;
     SQInteger _scratchpadsize;

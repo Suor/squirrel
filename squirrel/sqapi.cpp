@@ -537,6 +537,24 @@ SQRESULT sq_bindenv(HSQUIRRELVM v,SQInteger idx)
     SQWeakRef *w = _refcounted(env)->GetWeakRef(sq_type(env));
     SQObjectPtr ret;
     if(sq_isclosure(o)) {
+#ifndef NO_GARBAGE_COLLECTOR
+        // The last closure bound from this one, if it is bound to the same environment
+        // and nothing but the cache holds it, not even a weak reference: then nothing can
+        // tell it from the clone made below. A clone's state is its source's (outer
+        // values, default parameters, function, base) and the environment, apart from
+        // its root (setroot), compared too.
+        SQClosure *src = _closure(o);
+        SQBindCacheEntry &e = _ss(v)->_bindcache[SQSharedState::BindCacheSlot(src)];
+        if(e._src == src) {
+            SQClosure *last = _closure(e._bound);
+            if(last->_uiRef == 1 && !last->_weakref && last->_env == w
+                && last->_root == src->_root && last->_base == src->_base) {
+                v->Pop();
+                v->Push(e._bound);
+                return SQ_OK;
+            }
+        }
+#endif
         SQClosure *c = _closure(o)->Clone();
         __ObjRelease(c->_env);
         c->_env = w;
@@ -546,6 +564,11 @@ SQRESULT sq_bindenv(HSQUIRRELVM v,SQInteger idx)
             __ObjAddRef(c->_base);
         }
         ret = c;
+#ifndef NO_GARBAGE_COLLECTOR
+        e._src = NULL; // releasing the last one may clear entries
+        e._bound = ret;
+        e._src = src;
+#endif
     }
     else { //then must be a native closure
         SQNativeClosure *c = _nativeclosure(o)->Clone();
