@@ -158,7 +158,7 @@ struct SQNativeAccess
 struct SQNativeClosure : public CHAINABLE_OBJ
 {
 private:
-    SQNativeClosure(SQSharedState *ss,SQFUNCTION func){_function=func;INIT_CHAIN();ADD_TO_CHAIN(&_ss(this)->_gc_chain,this); _env = NULL; _access = NULL;}
+    SQNativeClosure(SQSharedState *ss,SQFUNCTION func){_function=func;INIT_CHAIN();ADD_TO_CHAIN(&_ss(this)->_gc_chain,this); _env = NULL; _access = NULL; _ntypecheck = 0; _up = NULL;}
 public:
     static SQNativeClosure *Create(SQSharedState *ss,SQFUNCTION func,SQInteger nouters)
     {
@@ -178,8 +178,18 @@ public:
         ret->_name = _name;
         _COPY_VECTOR(ret->_outervalues,_outervalues,_noutervalues);
         ret->_typecheck.copy(_typecheck);
+        ret->_ntypecheck = _ntypecheck;
+        ret->_up = _up;
         ret->_nparamscheck = _nparamscheck;
         return ret;
+    }
+    // After a change to _typecheck: how many leading parameters a call checks (the
+    // entries after the last one that isn't "any type" never fail).
+    void TypecheckChanged()
+    {
+        SQUnsignedInteger n = _typecheck.size();
+        while(n > 0 && _typecheck[n - 1] == -1) n--;
+        _ntypecheck = (SQInt32)n;
     }
     // The closure's part in the direct property route, made on first use. Clone() leaves
     // it out: a clone (bindenv's) has an environment, so its `this` isn't the instance.
@@ -217,9 +227,11 @@ public:
     SQInteger _nparamscheck;
     SQIntVec _typecheck;
     SQObjectPtr *_outervalues;
-    SQUnsignedInteger _noutervalues;
+    SQUnsignedInteger32 _noutervalues;
+    SQInt32 _ntypecheck;
     SQWeakRef *_env;
     SQNativeAccess *_access;
+    SQUserPointer _up;
     SQFUNCTION _function;
     SQObjectPtr _name;
 };

@@ -310,6 +310,11 @@ SQUIRREL_API SQRESULT sq_getfunctioninfo(HSQUIRRELVM v,SQInteger level,SQFunctio
 SQUIRREL_API SQRESULT sq_getclosureinfo(HSQUIRRELVM v,SQInteger idx,SQInteger *nparams,SQInteger *nfreevars);
 SQUIRREL_API SQRESULT sq_getclosurename(HSQUIRRELVM v,SQInteger idx);
 SQUIRREL_API SQRESULT sq_setnativeclosurename(HSQUIRRELVM v,SQInteger idx,const SQChar *name);
+/* A user pointer the native closure at idx carries (a clone carries it too). Its function
+   reads it back with sq_getnativeclosureup: the pointer of the native closure being called,
+   or NULL. */
+SQUIRREL_API SQRESULT sq_setnativeclosureup(HSQUIRRELVM v,SQInteger idx,SQUserPointer up);
+SQUIRREL_API SQUserPointer sq_getnativeclosureup(HSQUIRRELVM v);
 /* Sqrat-style native properties, read and written without the metamethod's call frame.
    sq_setaccessortable: the native closure at idx is a class's `_get` (or `_set`) metamethod
    that does exactly this: for a string key, it looks the key up raw in the table on top of

@@ -83,6 +83,7 @@ SQTable *CreateDefaultDelegate(SQSharedState *ss,const SQRegFunction *funcz)
         nc->_name = SQString::Create(ss,funcz[i].name);
         if(funcz[i].typemask && !CompileTypemask(nc->_typecheck,funcz[i].typemask))
             return NULL;
+        nc->TypecheckChanged();
         t->NewSlot(SQString::Create(ss,funcz[i].name),nc);
         i++;
     }

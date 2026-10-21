@@ -1221,7 +1221,7 @@ bool SQVM::CallNative(SQNativeClosure *nclosure, SQInteger nargs, SQInteger newb
 
     SQInteger tcs;
     SQIntVec &tc = nclosure->_typecheck;
-    if((tcs = tc.size())) {
+    if((tcs = nclosure->_ntypecheck)) {
         for(SQInteger i = 0; i < nargs && i < tcs; i++) {
             if((tc._vals[i] != -1) && !(sq_type(_stack._vals[newbase+i]) & tc._vals[i])) {
                 Raise_ParamTypeError(i,tc._vals[i], sq_type(_stack._vals[newbase+i]));
@@ -1420,7 +1420,7 @@ SQInteger SQVM::NativeAccess(const SQObjectPtr &mm,const SQObjectPtr &self,const
     if(sq_type(mm) != OT_NATIVECLOSURE || sq_type(key) != OT_STRING) return NATIVE_ACCESS_DECLINED;
     SQNativeClosure *meta = _nativeclosure(mm);
     if(!meta->_access || sq_type(meta->_access->_table) != OT_TABLE || meta->_env
-        || meta->_nparamscheck || meta->_typecheck.size()) return NATIVE_ACCESS_DECLINED;
+        || meta->_nparamscheck || meta->_ntypecheck) return NATIVE_ACCESS_DECLINED;
     // The call's own checks (CallNative, EnterFrame): native call depth, and room for its
     // frame without growing the stack, which a metamethod call may not.
     SQInteger nargs = val ? 3 : 2;
