@@ -146,10 +146,19 @@ public:
 
 #define _CALC_NATVIVECLOSURE_SIZE(noutervalues) (sizeof(SQNativeClosure) + (noutervalues*sizeof(SQObjectPtr)))
 
+// What a native closure is to the VM's direct property route (sq_setaccessortable,
+// sq_setnativeaccessor): a metamethod's accessor table, or an accessor's function.
+struct SQNativeAccess
+{
+    SQObjectPtr _table;
+    SQNATIVEACCESSOR _fn;
+    SQUserPointer _ud;
+};
+
 struct SQNativeClosure : public CHAINABLE_OBJ
 {
 private:
-    SQNativeClosure(SQSharedState *ss,SQFUNCTION func){_function=func;INIT_CHAIN();ADD_TO_CHAIN(&_ss(this)->_gc_chain,this); _env = NULL;}
+    SQNativeClosure(SQSharedState *ss,SQFUNCTION func){_function=func;INIT_CHAIN();ADD_TO_CHAIN(&_ss(this)->_gc_chain,this); _env = NULL; _access = NULL;}
 public:
     static SQNativeClosure *Create(SQSharedState *ss,SQFUNCTION func,SQInteger nouters)
     {
@@ -172,8 +181,24 @@ public:
         ret->_nparamscheck = _nparamscheck;
         return ret;
     }
+    // The closure's part in the direct property route, made on first use. Clone() leaves
+    // it out: a clone (bindenv's) has an environment, so its `this` isn't the instance.
+    SQNativeAccess *Access()
+    {
+        if (!_access) {
+            _access = (SQNativeAccess *)SQ_MALLOC(sizeof(SQNativeAccess));
+            new (_access) SQNativeAccess();
+            _access->_fn = NULL;
+            _access->_ud = NULL;
+        }
+        return _access;
+    }
     ~SQNativeClosure()
     {
+        if (_access) {
+            _access->~SQNativeAccess();
+            SQ_FREE(_access, sizeof(SQNativeAccess));
+        }
         __ObjRelease(_env);
         REMOVE_FROM_CHAIN(&_ss(this)->_gc_chain,this);
     }
@@ -186,7 +211,7 @@ public:
 
 #ifndef NO_GARBAGE_COLLECTOR
     void Mark(SQCollectable **chain);
-    void Finalize() { _NULL_SQOBJECT_VECTOR(_outervalues,_noutervalues); }
+    void Finalize() { _NULL_SQOBJECT_VECTOR(_outervalues,_noutervalues); if (_access) _access->_table.Null(); }
     SQObjectType GetType() {return OT_NATIVECLOSURE;}
 #endif
     SQInteger _nparamscheck;
@@ -194,6 +219,7 @@ public:
     SQObjectPtr *_outervalues;
     SQUnsignedInteger _noutervalues;
     SQWeakRef *_env;
+    SQNativeAccess *_access;
     SQFUNCTION _function;
     SQObjectPtr _name;
 };

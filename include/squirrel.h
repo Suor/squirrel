@@ -175,6 +175,8 @@ typedef struct SQVM* HSQUIRRELVM;
 typedef SQObject HSQOBJECT;
 typedef SQMemberHandle HSQMEMBERHANDLE;
 typedef SQInteger (*SQFUNCTION)(HSQUIRRELVM);
+/* A native property accessor the VM may call without a call frame (see sq_setnativeaccessor). */
+typedef SQInteger (*SQNATIVEACCESSOR)(HSQUIRRELVM,SQUserPointer ud,SQUserPointer typetag,SQUserPointer instanceup);
 typedef SQInteger (*SQRELEASEHOOK)(SQUserPointer,SQInteger size);
 typedef void (*SQCOMPILERERROR)(HSQUIRRELVM,const SQChar * /*desc*/,const SQChar * /*source*/,SQInteger /*line*/,SQInteger /*column*/);
 typedef void (*SQPRINTFUNCTION)(HSQUIRRELVM,const SQChar * ,...);
@@ -308,6 +310,18 @@ SQUIRREL_API SQRESULT sq_getfunctioninfo(HSQUIRRELVM v,SQInteger level,SQFunctio
 SQUIRREL_API SQRESULT sq_getclosureinfo(HSQUIRRELVM v,SQInteger idx,SQInteger *nparams,SQInteger *nfreevars);
 SQUIRREL_API SQRESULT sq_getclosurename(HSQUIRRELVM v,SQInteger idx);
 SQUIRREL_API SQRESULT sq_setnativeclosurename(HSQUIRRELVM v,SQInteger idx,const SQChar *name);
+/* Sqrat-style native properties, read and written without the metamethod's call frame.
+   sq_setaccessortable: the native closure at idx is a class's `_get` (or `_set`) metamethod
+   that does exactly this: for a string key, it looks the key up raw in the table on top of
+   the stack (popped here), throws null if it is not there, and otherwise calls what it finds
+   with the instance as `this` (and the value). The VM then does that lookup itself, and calls
+   an accessor it finds directly when that is a native closure given a function with
+   sq_setnativeaccessor: fn(v, ud, the instance's class typetag, the instance's user pointer).
+   A getter's fn pushes the value and returns 1; a setter's reads the value at -1 and returns
+   1; either returns 0, leaving the stack as it was, to decline: the VM then calls the
+   metamethod as usual. fn must not raise errors or call into the VM. */
+SQUIRREL_API SQRESULT sq_setaccessortable(HSQUIRRELVM v,SQInteger idx);
+SQUIRREL_API SQRESULT sq_setnativeaccessor(HSQUIRRELVM v,SQInteger idx,SQNATIVEACCESSOR fn,SQUserPointer ud);
 SQUIRREL_API SQRESULT sq_setinstanceup(HSQUIRRELVM v, SQInteger idx, SQUserPointer p);
 SQUIRREL_API SQRESULT sq_getinstanceup(HSQUIRRELVM v, SQInteger idx, SQUserPointer *p,SQUserPointer typetag,SQBool throwerror);
 SQUIRREL_API SQRESULT sq_setclassudsize(HSQUIRRELVM v, SQInteger idx, SQInteger udsize);

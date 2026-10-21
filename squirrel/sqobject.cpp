@@ -831,6 +831,7 @@ void SQNativeClosure::Mark(SQCollectable **chain)
 {
     START_MARK()
         for(SQUnsignedInteger i = 0; i < _noutervalues; i++) SQSharedState::MarkObject(_outervalues[i], chain);
+        if(_access) SQSharedState::MarkObject(_access->_table, chain);
     END_MARK()
 }
 

@@ -432,6 +432,30 @@ SQRESULT sq_setnativeclosurename(HSQUIRRELVM v,SQInteger idx,const SQChar *name)
     return sq_throwerror(v,_SC("the object is not a nativeclosure"));
 }
 
+SQRESULT sq_setaccessortable(HSQUIRRELVM v,SQInteger idx)
+{
+    SQObject o = stack_get(v, idx);
+    SQObjectPtr &table = stack_get(v, -1);
+    if(!sq_isnativeclosure(o))
+        return sq_throwerror(v,_SC("the object is not a nativeclosure"));
+    if(!sq_istable(table))
+        return sq_throwerror(v,_SC("the accessor table is not a table"));
+    _nativeclosure(o)->Access()->_table = table;
+    v->Pop();
+    return SQ_OK;
+}
+
+SQRESULT sq_setnativeaccessor(HSQUIRRELVM v,SQInteger idx,SQNATIVEACCESSOR fn,SQUserPointer ud)
+{
+    SQObject o = stack_get(v, idx);
+    if(!sq_isnativeclosure(o))
+        return sq_throwerror(v,_SC("the object is not a nativeclosure"));
+    SQNativeAccess *a = _nativeclosure(o)->Access();
+    a->_fn = fn;
+    a->_ud = ud;
+    return SQ_OK;
+}
+
 SQRESULT sq_setparamscheck(HSQUIRRELVM v,SQInteger nparamscheck,const SQChar *typemask)
 {
     SQObject o = stack_get(v, -1);

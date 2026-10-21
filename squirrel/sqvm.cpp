@@ -1291,6 +1291,7 @@ bool SQVM::TailCall(SQClosure *closure, SQInteger parambase,SQInteger nparams)
 #define FALLBACK_OK         0
 #define FALLBACK_NO_MATCH   1
 #define FALLBACK_ERROR      2
+#define NATIVE_ACCESS_DECLINED 3
 
 bool SQVM::Get(const SQObjectPtr &self, const SQObjectPtr &key, SQObjectPtr &dest, SQUnsignedInteger getflags, SQInteger selfidx)
 {
@@ -1382,6 +1383,10 @@ SQInteger SQVM::FallBackGet(const SQObjectPtr &self,const SQObjectPtr &key,SQObj
     case OT_INSTANCE: {
         SQObjectPtr closure;
         if(_delegable(self)->GetMetaMethod(this, MT_GET, closure)) {
+            if(sq_type(self) == OT_INSTANCE) {
+                SQInteger r = NativeAccess(closure, self, key, NULL, dest);
+                if(r != NATIVE_ACCESS_DECLINED) return r;
+            }
             Push(self);Push(key);
             _nmetamethodscall++;
             AutoDec ad(&_nmetamethodscall);
@@ -1402,6 +1407,45 @@ SQInteger SQVM::FallBackGet(const SQObjectPtr &self,const SQObjectPtr &key,SQObj
     }
     // no metamethod or no fallback type
     return FALLBACK_NO_MATCH;
+}
+
+// A native class's property (sq_setaccessortable): what calling the metamethod `mm` would
+// do, without its call frame, when the key's accessor is a native one with a direct function
+// (sq_setnativeaccessor). FALLBACK_OK: read into `dest` (or written from `*val`);
+// FALLBACK_NO_MATCH: the accessor table has no such key (the metamethod's `throw null`);
+// NATIVE_ACCESS_DECLINED: call the metamethod. Only taken where the call could not fail
+// before reaching the accessor, so errors (and their call stacks) come from the call.
+SQInteger SQVM::NativeAccess(const SQObjectPtr &mm,const SQObjectPtr &self,const SQObjectPtr &key,const SQObjectPtr *val,SQObjectPtr &dest)
+{
+    if(sq_type(mm) != OT_NATIVECLOSURE || sq_type(key) != OT_STRING) return NATIVE_ACCESS_DECLINED;
+    SQNativeClosure *meta = _nativeclosure(mm);
+    if(!meta->_access || sq_type(meta->_access->_table) != OT_TABLE || meta->_env
+        || meta->_nparamscheck || meta->_typecheck.size()) return NATIVE_ACCESS_DECLINED;
+    // The call's own checks (CallNative, EnterFrame): native call depth, and room for its
+    // frame without growing the stack, which a metamethod call may not.
+    SQInteger nargs = val ? 3 : 2;
+    if(_nnativecalls + 2 > MAX_NATIVE_CALLS
+        || _top + nargs + (SQInteger)meta->_noutervalues + MIN_STACK_OVERHEAD > (SQInteger)_stack.size())
+        return NATIVE_ACCESS_DECLINED;
+    SQObjectPtr accessor;
+    if(!_table(meta->_access->_table)->Get(key, accessor)) {
+        _lasterror.Null(); // as the metamethod's `throw null` leaves it
+        return FALLBACK_NO_MATCH;
+    }
+    if(sq_type(accessor) != OT_NATIVECLOSURE) return NATIVE_ACCESS_DECLINED;
+    SQNativeClosure *nc = _nativeclosure(accessor);
+    if(!nc->_access || !nc->_access->_fn || nc->_env) return NATIVE_ACCESS_DECLINED;
+    SQInstance *inst = _instance(self);
+    SQInteger top = _top;
+    if(val) Push(*val);
+    SQInteger r = nc->_access->_fn(this, nc->_access->_ud, inst->_class->_typetag, inst->_userpointer);
+    if(r != 1) {
+        Pop(_top - top);
+        return NATIVE_ACCESS_DECLINED;
+    }
+    if(!val) dest = _stack._vals[_top - 1];
+    Pop(_top - top);
+    return FALLBACK_OK;
 }
 
 bool SQVM::Set(const SQObjectPtr &self,const SQObjectPtr &key,const SQObjectPtr &val,SQInteger selfidx)
@@ -1452,6 +1496,10 @@ SQInteger SQVM::FallBackSet(const SQObjectPtr &self,const SQObjectPtr &key,const
         SQObjectPtr closure;
         SQObjectPtr t;
         if(_delegable(self)->GetMetaMethod(this, MT_SET, closure)) {
+            if(sq_type(self) == OT_INSTANCE) {
+                SQInteger r = NativeAccess(closure, self, key, &val, t);
+                if(r != NATIVE_ACCESS_DECLINED) return r;
+            }
             Push(self);Push(key);Push(val);
             _nmetamethodscall++;
             AutoDec ad(&_nmetamethodscall);
