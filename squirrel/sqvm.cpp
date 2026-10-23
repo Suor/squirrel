@@ -375,7 +375,7 @@ bool SQVM::TypeOf(const SQObjectPtr &obj1,SQObjectPtr &dest)
             return CallMetaMethod(closure,MT_TYPEOF,1,dest);
         }
     }
-    dest = SQString::Create(_ss(this),GetTypeName(obj1));
+    dest = _ss(this)->TypeName(GetTypeName(obj1));
     return true;
 }
 

@@ -131,6 +131,8 @@ public:
     unsigned long long LookupStamp(const SQTable *t, SQHash khash) const {
         return _lookupgen + _lookupkeygen[khash & (SQ_LOOKUPKEYGENS - 1)] + _lookuptablegen[LookupTableGen(t)];
     }
+    // `name` (one of GetTypeName's) as a string, made once: typeof's result.
+    const SQObjectPtr &TypeName(const SQChar *name);
     SQObjectPtrVec *_metamethods;
     SQObjectPtr _metamethodsmap;
     SQObjectPtrVec *_systemstrings;
@@ -172,6 +174,8 @@ public:
     bool _notifyallexceptions;
     SQUserPointer _foreignptr;
     SQRELEASEHOOK _releasehook;
+    const SQChar *_typenames[16];
+    SQObjectPtr _typenamestrings[16];
     bool _lookupcacheon;
     unsigned long long _lookupgen;
     unsigned long long _lookupkeygen[SQ_LOOKUPKEYGENS];

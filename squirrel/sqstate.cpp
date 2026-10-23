@@ -21,11 +21,24 @@ SQSharedState::SQSharedState()
     _notifyallexceptions = false;
     _foreignptr = NULL;
     _releasehook = NULL;
+    memset(_typenames, 0, sizeof(_typenames));
     _lookupcacheon = true;
     _lookupgen = 0;
     memset(_lookupkeygen, 0, sizeof(_lookupkeygen));
     memset(_lookuptablegen, 0, sizeof(_lookuptablegen));
     memset(_lookupcache, 0, sizeof(_lookupcache));
+}
+
+const SQObjectPtr &SQSharedState::TypeName(const SQChar *name)
+{
+    SQInteger i = 0;
+    for(; i < 16 && _typenames[i]; i++) {
+        if(_typenames[i] == name) return _typenamestrings[i];
+    }
+    assert(i < 16); // GetTypeName has fewer names
+    _typenames[i] = name;
+    _typenamestrings[i] = SQString::Create(this, name);
+    return _typenamestrings[i];
 }
 
 // A watched table gained or lost `key`: the cached lookups of that key are stale, and
@@ -200,6 +213,7 @@ SQSharedState::~SQSharedState()
 #endif
     if(_releasehook) { _releasehook(_foreignptr,0); _releasehook = NULL; }
     _constructoridx.Null();
+    for(SQInteger i = 0; i < 16; i++) _typenamestrings[i].Null();
     _table(_registry)->Finalize();
     _table(_consts)->Finalize();
     _table(_metamethodsmap)->Finalize();
