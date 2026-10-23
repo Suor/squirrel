@@ -270,6 +270,18 @@ public:
         if (Lazy()) return _LazyGet(SQObjectPtr(key), val);
         return false;
     }
+    // Get's read of the table's own slots only: for a lazy table, the slots it was given or
+    // has read (each as Get reads it), never its source's. False says nothing about them.
+    inline bool GetOwn(const SQObjectPtr &key,SQObjectPtr &val)
+    {
+        if(sq_type(key) == OT_NULL)
+            return false;
+        _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
+        if (!n) return false;
+        SQ_CENSUS_HOOK(sq_census_get(this, key, n->val));
+        val = _realval(n->val);
+        return true;
+    }
     void Remove(const SQObjectPtr &key);
     bool Set(const SQObjectPtr &key, const SQObjectPtr &val);
     //returns true if a new slot has been created false if it was already present

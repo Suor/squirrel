@@ -1299,10 +1299,10 @@ bool SQVM::Get(const SQObjectPtr &self, const SQObjectPtr &key, SQObjectPtr &des
     case OT_TABLE:
         if(_table(self)->Get(key,dest))return true;
         if(getflags == 0 && sq_type(key) == OT_STRING && _table(self)->_delegate) {
-            // Its delegate, as FallBackGet would first; past that, the lookup cache.
-            SQTable *d = _table(self)->_delegate;
-            if(d->Get(key,dest)) return true;
-            if(ChainGet(d,key,dest,selfidx)) return true;
+            // Its delegate's own slots (a slot read or written there, the most common
+            // answer: no lazy table's source is read); past that, the lookup cache.
+            if(_table(self)->_delegate->GetOwn(key,dest)) return true;
+            if(ChainGet(_table(self),key,dest,selfidx)) return true;
         }
         break;
     case OT_ARRAY:
@@ -1353,9 +1353,9 @@ bool SQVM::Get(const SQObjectPtr &self, const SQObjectPtr &key, SQObjectPtr &des
     return false;
 }
 
-// The rest of Get (getflags 0) for a table that lacks `key`, a string, as has its delegate
-// `t`: what FallBackGet, InvokeDefaultDelegate and the root fallback would find, when that
-// is a table's slot (a delegate of `t`'s, the default delegate's or the root table's),
+// The rest of Get (getflags 0) for a table `t` that lacks `key`, a string, and has a
+// delegate: what FallBackGet, InvokeDefaultDelegate and the root fallback would find, when
+// that is a table's slot (one of `t`'s delegates', the default delegate's or the root table's),
 // answered from the lookup cache (SQSharedState::_lookupcache) when it can be. False:
 // left to the full path, which comes to the same outcome, since nothing here changed
 // anything (the lookups that missed have no effect; a lazy table's `_get`, bound when
@@ -1394,7 +1394,7 @@ bool SQVM::ChainGet(SQTable *t,const SQObjectPtr &key,SQObjectPtr &dest,SQIntege
         if(_table_ddel->Get(key, tmp)) { dest = tmp; h = _table_ddel; }
         else {
             const SQObjectPtr &mmget = (*ss->_metamethods)[MT_GET];
-            for(SQTable *d = t; d; d = d->_delegate) {
+            for(SQTable *d = t->_delegate; d; d = d->_delegate) {
                 if(d->Get(mmget, tmp)) {
                     e._t = t; e._k = k; e._h = 0; e._stamp = stamp;
                     return false;
