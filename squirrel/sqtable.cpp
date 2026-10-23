@@ -26,8 +26,15 @@ SQTable::SQTable(SQSharedState *ss,SQInteger nInitialSize)
     ADD_TO_CHAIN(&_sharedstate->_gc_chain,this);
 }
 
+bool SQTable::SetDelegate(SQTable *mt)
+{
+    if (Watched()) _sharedstate->LookupFlush();
+    return SQDelegable::SetDelegate(mt);
+}
+
 void SQTable::Remove(const SQObjectPtr &key)
 {
+    if (Watched()) _sharedstate->LookupKeyChanged(key);
     if (Lazy()) {
         if (!Has(key)) return;
         Materialize();
@@ -123,6 +130,7 @@ bool SQTable::NewSlot(const SQObjectPtr &key,const SQObjectPtr &val)
 {
     assert(sq_type(key) != OT_NULL);
     SQ_CENSUS_HOOK(sq_census_write(this, key));
+    if (Watched()) _sharedstate->LookupKeyChanged(key);
     if (Version()) _DetachVersion();
     if (Lazy()) {
         _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
@@ -256,6 +264,7 @@ void SQTable::Finalize()
 void SQTable::Clear()
 {
     SQ_CENSUS_HOOK(sq_census_iterate(this), sq_census_reshape(this, 8));
+    if (Watched()) _sharedstate->LookupFlush();
     if (Lazy()) Materialize();
     if (Version()) _DetachVersion();
     _ClearNodes();
@@ -386,6 +395,7 @@ bool SQTable::LazyInject(SQTable *extra, SQArray *keys, SQWeakRef *env)
     // Lazy tables reading through this one keep it as it is; that makes it a plain table.
     if (Version()) _DetachVersion();
     if (!Lazy()) return false;
+    if (Watched()) _sharedstate->LookupFlush();
     SQTableInjected inj;
     inj._slots = extra;
     __ObjAddRef(extra);
@@ -594,3 +604,4 @@ SQTable *SQTable::_CloneLazy()
     nt->SetDelegate(_delegate);
     return nt;
 }
+

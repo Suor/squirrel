@@ -132,23 +132,30 @@ private:
     // would be; a clone of one whose values aren't bound when read is lazy too.
     //
     // A version is set while lazy tables read through this one's contents as they are now.
+    //
+    // Bits 1 and 2 are the lookup cache's flags (see Watched, Started), kept through both.
     SQUnsignedInteger _ext;
-    SQTableLazy *Lazy() const { return (_ext & 1) ? NULL : (SQTableLazy *)_ext; }
+    static const SQUnsignedInteger _WATCHED = 2;
+    static const SQUnsignedInteger _STARTED = 4;
+    static const SQUnsignedInteger _FLAGS = _WATCHED | _STARTED;
+    SQTableLazy *Lazy() const { return (_ext & 1) ? NULL : (SQTableLazy *)(_ext & ~_FLAGS); }
     SQTableVersion *Version() const
     {
-        if (_ext & 1) return (SQTableVersion *)(_ext - 1);
-        return _ext ? ((SQTableLazy *)_ext)->_version : NULL;
+        if (_ext & 1) return (SQTableVersion *)(_ext & ~(_FLAGS | 1));
+        SQTableLazy *lz = Lazy();
+        return lz ? lz->_version : NULL;
     }
     void SetLazy(SQTableLazy *lz)
     {
         SQTableVersion *v = Version();
-        if (lz) { lz->_version = v; _ext = (SQUnsignedInteger)lz; }
-        else _ext = v ? (SQUnsignedInteger)v | 1 : 0;
+        SQUnsignedInteger w = _ext & _FLAGS;
+        if (lz) { lz->_version = v; _ext = (SQUnsignedInteger)lz | w; }
+        else _ext = (v ? (SQUnsignedInteger)v | 1 : 0) | w;
     }
     void SetVersion(SQTableVersion *v)
     {
         if (SQTableLazy *lz = Lazy()) lz->_version = v;
-        else _ext = v ? (SQUnsignedInteger)v | 1 : 0;
+        else _ext = (v ? (SQUnsignedInteger)v | 1 : 0) | (_ext & _FLAGS);
     }
 
 ///////////////////////////
@@ -187,6 +194,18 @@ public:
     // Makes a lazy table a plain one, laid out as the clone it stands for would be.
     void Materialize();
     bool IsLazy() const { return Lazy() != NULL; }
+    // Whether a cached lookup (SQSharedState::_lookupcache) may depend on this table: its
+    // changes that could change a lookup's outcome then make the cache's entries stale.
+    // Set when an entry is made, and kept.
+    bool Watched() const { return (_ext & _WATCHED) != 0; }
+    void Watch() { _ext |= _WATCHED; }
+    // Whether a cached lookup started at this table (its entries are forgotten as it is
+    // freed, so that a table made at its address can't be taken for it). Set with Watch.
+    bool Started() const { return (_ext & _STARTED) != 0; }
+    void Start() { _ext |= _STARTED | _WATCHED; }
+    // SQDelegable's, telling the lookup cache when the table is watched (and as it is
+    // freed, which sets no delegate).
+    bool SetDelegate(SQTable *mt);
     // Whether the table has `key`, without reading it (no closure is bound).
     bool Has(const SQObjectPtr &key);
     void Finalize();
@@ -196,7 +215,10 @@ public:
         SQ_CENSUS_FORGET(this);
         _ReleaseLazy();
         if (SQTableVersion *v = Version()) v->_table = NULL;
-        SetDelegate(NULL);
+        // Freed, nothing holds it: a lookup the cache keeps that passed it started at a
+        // table holding it, freed before it (see SQSharedState::LookupForget).
+        if (Started()) _sharedstate->LookupForget(this);
+        SQDelegable::SetDelegate(NULL);
         REMOVE_FROM_CHAIN(&_sharedstate->_gc_chain, this);
         for (SQInteger i = 0; i < _numofnodes; i++) _nodes[i].~_HashNode();
         SQ_FREE(_nodes, _numofnodes * sizeof(_HashNode));

@@ -72,6 +72,26 @@ struct SQBindCacheEntry
 };
 #endif
 
+// Where a table lookup that missed the table itself ended, through its delegates or the
+// root table (see SQVM::ChainGet). `_h` is the table that has the key (one of `_t`'s
+// delegates, the default delegate, or with bit 0 set the root table), or NULL: a lookup
+// the cache leaves to the full path (a delegate's `_get` may answer it). Raw pointers, not
+// held: every table an entry depends on is watched (SQTable::Watched), and a watched
+// table's change that could change an entry's outcome (a key given or removed, a delegate
+// set or cleared) makes the entry stale, as does freeing the table it started at. Stale is
+// told by `_stamp`, the sum of the generations it depends on: all entries', its key's and
+// its table's (each only ever counts up, so the sum is the same only while none moved).
+#define SQ_LOOKUPCACHE_SIZE 8192
+#define SQ_LOOKUPKEYGENS 1024
+#define SQ_LOOKUPTABLEGENS 1024
+struct SQLookupCacheEntry
+{
+    SQTable *_t;
+    SQString *_k;
+    SQUnsignedInteger _h;
+    unsigned long long _stamp;
+};
+
 struct SQSharedState
 {
     SQSharedState();
@@ -95,6 +115,22 @@ public:
         if(e._src == src) { e._src = NULL; e._bound.Null(); }
     }
 #endif
+    // The lookup cache (SQLookupCacheEntry). Every entry stale:
+    void LookupFlush() { _lookupgen++; }
+    // A watched table gained or lost `key`.
+    void LookupKeyChanged(const SQObject &key);
+    // `t`, a table lookups started at, is being freed: its entries go (with those of the
+    // tables that share its generation).
+    void LookupForget(const SQTable *t) { _lookuptablegen[LookupTableGen(t)]++; }
+    static SQUnsignedInteger LookupSlot(const SQTable *t, const SQString *k) {
+        return (SQUnsignedInteger)(((((unsigned long long)(size_t)t) ^ (((unsigned long long)(size_t)k) << 7)) * 0x9E3779B97F4A7C15ULL) >> 40) & (SQ_LOOKUPCACHE_SIZE - 1);
+    }
+    static SQUnsignedInteger LookupTableGen(const SQTable *t) {
+        return (SQUnsignedInteger)((((unsigned long long)(size_t)t) * 0x9E3779B97F4A7C15ULL) >> 40) & (SQ_LOOKUPTABLEGENS - 1);
+    }
+    unsigned long long LookupStamp(const SQTable *t, SQHash khash) const {
+        return _lookupgen + _lookupkeygen[khash & (SQ_LOOKUPKEYGENS - 1)] + _lookuptablegen[LookupTableGen(t)];
+    }
     SQObjectPtrVec *_metamethods;
     SQObjectPtr _metamethodsmap;
     SQObjectPtrVec *_systemstrings;
@@ -136,6 +172,11 @@ public:
     bool _notifyallexceptions;
     SQUserPointer _foreignptr;
     SQRELEASEHOOK _releasehook;
+    bool _lookupcacheon;
+    unsigned long long _lookupgen;
+    unsigned long long _lookupkeygen[SQ_LOOKUPKEYGENS];
+    unsigned long long _lookuptablegen[SQ_LOOKUPTABLEGENS];
+    SQLookupCacheEntry _lookupcache[SQ_LOOKUPCACHE_SIZE];
 #ifndef NO_GARBAGE_COLLECTOR
     // Last, after the members the VM reads all the time.
     SQBindCacheEntry _bindcache[SQ_BINDCACHE_SIZE];

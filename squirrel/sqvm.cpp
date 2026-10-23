@@ -1298,6 +1298,12 @@ bool SQVM::Get(const SQObjectPtr &self, const SQObjectPtr &key, SQObjectPtr &des
     switch(sq_type(self)){
     case OT_TABLE:
         if(_table(self)->Get(key,dest))return true;
+        if(getflags == 0 && sq_type(key) == OT_STRING && _table(self)->_delegate) {
+            // Its delegate, as FallBackGet would first; past that, the lookup cache.
+            SQTable *d = _table(self)->_delegate;
+            if(d->Get(key,dest)) return true;
+            if(ChainGet(d,key,dest,selfidx)) return true;
+        }
         break;
     case OT_ARRAY:
         if (sq_isnumeric(key)) { if (_array(self)->Get(tointeger(key), dest)) { return true; } if ((getflags & GET_FLAG_DO_NOT_RAISE_ERROR) == 0) Raise_IdxError(key); return false; }
@@ -1345,6 +1351,70 @@ bool SQVM::Get(const SQObjectPtr &self, const SQObjectPtr &key, SQObjectPtr &des
 //#endif
     if ((getflags & GET_FLAG_DO_NOT_RAISE_ERROR) == 0) Raise_IdxError(key);
     return false;
+}
+
+// The rest of Get (getflags 0) for a table that lacks `key`, a string, as has its delegate
+// `t`: what FallBackGet, InvokeDefaultDelegate and the root fallback would find, when that
+// is a table's slot (a delegate of `t`'s, the default delegate's or the root table's),
+// answered from the lookup cache (SQSharedState::_lookupcache) when it can be. False:
+// left to the full path, which comes to the same outcome, since nothing here changed
+// anything (the lookups that missed have no effect; a lazy table's `_get`, bound when
+// read, is bound once and kept, as the full path's read would).
+//
+// The full path's order: the delegates, nearest first, until one has the key; then the
+// default delegate; then, back from the farthest delegate, each one's `_get` (called if
+// there) and the default delegate again (missing again); then the root table.
+bool SQVM::ChainGet(SQTable *t,const SQObjectPtr &key,SQObjectPtr &dest,SQInteger selfidx)
+{
+    SQSharedState *ss = _ss(this);
+    if(!ss->_lookupcacheon) return false;
+    SQString *k = _string(key);
+    SQTable *root = NULL;
+    if(selfidx == 0) {
+        SQObject &r = _closure(ci->_closure)->_root->_obj;
+        if(sq_type(r) == OT_TABLE) root = _table(r);
+    }
+    SQLookupCacheEntry &e = ss->_lookupcache[SQSharedState::LookupSlot(t, k)];
+    unsigned long long stamp = ss->LookupStamp(t, k->_hash);
+    if(e._t == t && e._k == k && e._stamp == stamp) {
+        if(!e._h) return false;
+        // A root table's slot holds for the same root only.
+        SQTable *h = (SQTable *)(e._h & ~(SQUnsignedInteger)1);
+        if(!(e._h & 1) || h == root) {
+            if(h->Get(key, dest)) return true;
+        }
+    }
+    SQTable *h = NULL;
+    bool fromroot = false;
+    for(SQTable *d = t->_delegate; d; d = d->_delegate) {
+        if(d->Get(key, dest)) { h = d; break; }
+    }
+    if(!h) {
+        SQObjectPtr tmp;
+        if(_table_ddel->Get(key, tmp)) { dest = tmp; h = _table_ddel; }
+        else {
+            const SQObjectPtr &mmget = (*ss->_metamethods)[MT_GET];
+            for(SQTable *d = t; d; d = d->_delegate) {
+                if(d->Get(mmget, tmp)) {
+                    e._t = t; e._k = k; e._h = 0; e._stamp = stamp;
+                    return false;
+                }
+            }
+            if(!root || !root->Get(key, dest)) return false;
+            h = root;
+            fromroot = true;
+        }
+    }
+    // Watch every table the outcome depends on: those passed and the one that answered.
+    t->Start();
+    for(SQTable *d = t->_delegate; d; d = d->_delegate) {
+        d->Watch();
+        if(d == h) break;
+    }
+    if(h == _table_ddel || fromroot) _table_ddel->Watch();
+    if(fromroot) root->Watch();
+    e._t = t; e._k = k; e._h = (SQUnsignedInteger)h | (fromroot ? 1 : 0); e._stamp = stamp;
+    return true;
 }
 
 bool SQVM::InvokeDefaultDelegate(const SQObjectPtr &self,const SQObjectPtr &key,SQObjectPtr &dest)

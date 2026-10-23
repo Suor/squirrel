@@ -734,6 +734,12 @@ HSQUIRRELVM sq_getrootvm(HSQUIRRELVM v)
     return _thread(_ss(v)->_root_vm);
 }
 
+void sq_setlookupcache(HSQUIRRELVM v,SQBool enable)
+{
+    _ss(v)->_lookupcacheon = enable ? true : false;
+    _ss(v)->LookupFlush();
+}
+
 void sq_setsharedforeignptr(HSQUIRRELVM v,SQUserPointer p)
 {
     _ss(v)->_foreignptr = p;

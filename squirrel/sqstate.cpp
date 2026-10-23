@@ -21,6 +21,20 @@ SQSharedState::SQSharedState()
     _notifyallexceptions = false;
     _foreignptr = NULL;
     _releasehook = NULL;
+    _lookupcacheon = true;
+    _lookupgen = 0;
+    memset(_lookupkeygen, 0, sizeof(_lookupkeygen));
+    memset(_lookuptablegen, 0, sizeof(_lookuptablegen));
+    memset(_lookupcache, 0, sizeof(_lookupcache));
+}
+
+// A watched table gained or lost `key`: the cached lookups of that key are stale, and
+// all of them if it is `_get`, which every lookup that misses a table may call.
+void SQSharedState::LookupKeyChanged(const SQObject &key)
+{
+    if(sq_type(key) != OT_STRING) return;
+    if(_rawval(key) == _rawval((*_metamethods)[MT_GET])) { LookupFlush(); return; }
+    _lookupkeygen[_string(key)->_hash & (SQ_LOOKUPKEYGENS - 1)]++;
 }
 
 #define newsysstring(s) {   \

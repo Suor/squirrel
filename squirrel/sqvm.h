@@ -70,6 +70,7 @@ public:
     void CallErrorHandler(SQObjectPtr &e);
     bool Get(const SQObjectPtr &self, const SQObjectPtr &key, SQObjectPtr &dest, SQUnsignedInteger getflags, SQInteger selfidx);
     SQInteger FallBackGet(const SQObjectPtr &self,const SQObjectPtr &key,SQObjectPtr &dest);
+    bool ChainGet(SQTable *t,const SQObjectPtr &key,SQObjectPtr &dest,SQInteger selfidx);
     SQInteger NativeAccess(const SQObjectPtr &mm,const SQObjectPtr &self,const SQObjectPtr &key,const SQObjectPtr *val,SQObjectPtr &dest);
     bool InvokeDefaultDelegate(const SQObjectPtr &self,const SQObjectPtr &key,SQObjectPtr &dest);
     bool Set(const SQObjectPtr &self, const SQObjectPtr &key, const SQObjectPtr &val, SQInteger selfidx);

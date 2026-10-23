@@ -221,6 +221,9 @@ SQUIRREL_API SQRESULT sq_wakeupvm(HSQUIRRELVM v,SQBool resumedret,SQBool retval,
 SQUIRREL_API SQInteger sq_getvmstate(HSQUIRRELVM v);
 /* the VM sq_open made, which v (a thread of it, or itself) shares its state with */
 SQUIRREL_API HSQUIRRELVM sq_getrootvm(HSQUIRRELVM v);
+/* whether lookups that miss a table and its delegate are answered from the lookup cache
+   where they can be (on by default; the same outcome either way) */
+SQUIRREL_API void sq_setlookupcache(HSQUIRRELVM v,SQBool enable);
 SQUIRREL_API SQInteger sq_getversion();
 
 /*compiler*/
