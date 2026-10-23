@@ -255,7 +255,21 @@ public:
         }
         return false;
     }
-    bool Get(const SQObjectPtr &key,SQObjectPtr &val);
+    // Inline: the VM's most frequent call (a lazy table's read through is not).
+    inline bool Get(const SQObjectPtr &key,SQObjectPtr &val)
+    {
+        if(sq_type(key) == OT_NULL)
+            return false;
+        _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
+        if (n) {
+            // `key` and `val` may be the same object (sq_rawget).
+            SQ_CENSUS_HOOK(sq_census_get(this, key, n->val));
+            val = _realval(n->val);
+            return true;
+        }
+        if (Lazy()) return _LazyGet(SQObjectPtr(key), val);
+        return false;
+    }
     void Remove(const SQObjectPtr &key);
     bool Set(const SQObjectPtr &key, const SQObjectPtr &val);
     //returns true if a new slot has been created false if it was already present

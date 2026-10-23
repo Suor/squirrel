@@ -111,21 +111,6 @@ SQTable *SQTable::Clone()
     return nt;
 }
 
-bool SQTable::Get(const SQObjectPtr &key,SQObjectPtr &val)
-{
-    if(sq_type(key) == OT_NULL)
-        return false;
-    _HashNode *n = _Get(key, HashObj(key) & (_numofnodes - 1));
-    if (n) {
-        // `key` and `val` may be the same object (sq_rawget).
-        SQ_CENSUS_HOOK(sq_census_get(this, key, n->val));
-        val = _realval(n->val);
-        return true;
-    }
-    if (Lazy()) return _LazyGet(SQObjectPtr(key), val);
-    return false;
-}
-
 bool SQTable::NewSlot(const SQObjectPtr &key,const SQObjectPtr &val)
 {
     assert(sq_type(key) != OT_NULL);
