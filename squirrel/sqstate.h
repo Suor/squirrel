@@ -105,9 +105,7 @@ public:
     void RunMark(SQVM *vm,SQCollectable **tchain);
     SQInteger ResurrectUnreachable(SQVM *vm);
     static void MarkObject(const SQObject &o,SQCollectable **chain);
-    static SQUnsignedInteger BindCacheSlot(const SQClosure *src) {
-        return (SQUnsignedInteger)((((unsigned long long)(size_t)src) * 0x9E3779B97F4A7C15ULL) >> 58) & (SQ_BINDCACHE_SIZE - 1);
-    }
+    static SQUnsignedInteger BindCacheSlot(const SQClosure *src);
     void FlushBindCache();
     void ForgetBound(const SQClosure *bound);
     void ForgetBindSource(const SQClosure *src) {

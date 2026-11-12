@@ -128,6 +128,7 @@ SQRESULT sq_compile(HSQUIRRELVM v,SQLEXREADFUNC read,SQUserPointer p,const SQCha
 {
     SQObjectPtr o;
 #ifndef NO_COMPILER
+    SQSerialLoadScope serials;
     if(Compile(v, read, p, sourcename, o, raiseerror?true:false, _ss(v)->_debuginfo)) {
         v->Push(SQClosure::Create(_ss(v), _funcproto(o), _table(v->_roottable)->GetWeakRef(OT_TABLE)));
         return SQ_OK;
@@ -1433,6 +1434,7 @@ SQRESULT sq_writeclosure(HSQUIRRELVM v,SQWRITEFUNC w,SQUserPointer up)
 SQRESULT sq_readclosure(HSQUIRRELVM v,SQREADFUNC r,SQUserPointer up)
 {
     SQObjectPtr closure;
+    SQSerialLoadScope serials;
 
     unsigned short tag;
     if(r(up,&tag,2) != 2)

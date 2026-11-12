@@ -84,11 +84,24 @@ enum SQMetaMethod{
 
 #define MINPOWER2 4
 
+extern thread_local SQUnsignedInteger32 _sq_serial, _sq_serial_load;
+
+// Compiling a script and loading its bytecode make different objects: they are numbered apart, so the
+// objects made after don't depend on which of the two a script cache picked.
+struct SQSerialLoadScope
+{
+    SQUnsignedInteger32 _saved;
+    SQSerialLoadScope() { _saved = _sq_serial; _sq_serial = _sq_serial_load; }
+    ~SQSerialLoadScope() { _sq_serial_load = _sq_serial; _sq_serial = _saved; }
+};
+
 struct SQRefCounted
 {
-    SQUnsignedInteger _uiRef;
+    SQUnsignedInteger32 _uiRef;
+    // The object's hash as a table key: creation order is the same run to run, heap addresses aren't.
+    SQUnsignedInteger32 _serial;
     struct SQWeakRef *_weakref;
-    SQRefCounted() { _uiRef = 0; _weakref = NULL; }
+    SQRefCounted() { _uiRef = 0; _serial = ++_sq_serial; _weakref = NULL; }
     virtual ~SQRefCounted();
     SQWeakRef *GetWeakRef(SQObjectType type);
     virtual void Release()=0;

@@ -183,6 +183,11 @@ void SQSharedState::Init()
 }
 
 #ifndef NO_GARBAGE_COLLECTOR
+// By creation order, not address: which closures the cache keeps decides how many bindenv makes.
+SQUnsignedInteger SQSharedState::BindCacheSlot(const SQClosure *src) {
+    return (SQUnsignedInteger)((((unsigned long long)src->_serial) * 0x9E3779B97F4A7C15ULL) >> 58) & (SQ_BINDCACHE_SIZE - 1);
+}
+
 void SQSharedState::FlushBindCache()
 {
     for(SQInteger i = 0; i < SQ_BINDCACHE_SIZE; i++) {

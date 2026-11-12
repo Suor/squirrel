@@ -19,7 +19,7 @@ inline SQHash HashObj(const SQObject &key)
         case OT_STRING:     return _hashtables(_string(key)->_hash);
         case OT_FLOAT:      return (SQHash)((SQInteger)_float(key));
         case OT_BOOL: case OT_INTEGER:  return (SQHash)((SQInteger)_integer(key));
-        default:            return hashptr(key._unVal.pRefCounted);
+        default:            return ISREFCOUNTED(sq_type(key)) ? (SQHash)key._unVal.pRefCounted->_serial : hashptr(key._unVal.pUserPointer);
     }
 }
 

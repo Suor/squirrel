@@ -108,6 +108,8 @@ SQWeakRef *SQRefCounted::GetWeakRef(SQObjectType type)
     return _weakref;
 }
 
+thread_local SQUnsignedInteger32 _sq_serial = 0, _sq_serial_load = 0x80000000;
+
 SQRefCounted::~SQRefCounted()
 {
     if(_weakref) {

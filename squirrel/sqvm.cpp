@@ -342,8 +342,10 @@ bool SQVM::ToString(const SQObjectPtr &o,SQObjectPtr &res)
         // The original engine (MSVC) prints a pointer as fixed-width uppercase hex
         // with no prefix of its own ("(table : 0x0C1A2B30)"); glibc's %p adds "0x"
         // and drops leading zeros. Print the MSVC shape on every platform, the whole
-        // 64-bit pointer (16 digits), so the text stays unique per live object.
-        scsprintf(_sp(sq_rsl((sizeof(void*)*2)+NUMBER_MAX_CHAR)),sq_rsl((sizeof(void*)*2)+NUMBER_MAX_CHAR),_SC("(%s : 0x%016llX)"),GetTypeName(o),(unsigned long long)(size_t)_rawval(o));
+        // 64-bit pointer (16 digits), so the text stays unique per live object. A ref-counted
+        // object prints its serial instead: the text, and whether it is a new string, is then the same run to run.
+        scsprintf(_sp(sq_rsl((sizeof(void*)*2)+NUMBER_MAX_CHAR)),sq_rsl((sizeof(void*)*2)+NUMBER_MAX_CHAR),_SC("(%s : 0x%016llX)"),GetTypeName(o),
+            ISREFCOUNTED(sq_type(o)) ? (unsigned long long)o._unVal.pRefCounted->_serial : (unsigned long long)(size_t)_rawval(o));
     }
     res = SQString::Create(_ss(this),_spval);
     return true;
