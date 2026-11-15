@@ -382,21 +382,23 @@ SQInteger SQFunctionProto::GetLine(SQInstruction *curr)
     if (!_debuginfo || _nlineinfos == 0) return 0;
     SQInteger op = (SQInteger)(curr-_instructions);
     if (_debuginfo->_linessorted) {
-        // The line of the last entry before `op` (or the first entry's), as the binary
-        // search below finds it in a sorted table: walked, stopping at the first entry
-        // at or past `op`.
+        // Without an entry at `op`, the original's (3.0) search below gives the last entry
+        // before `op` (or the first entry's): walked. With one, which it gives depends on
+        // the search's path, so it runs.
         const unsigned char *p = _debuginfo->Bytes();
         SQUnsignedInteger l = DebugGet(p), o = DebugGet(p);
         SQInteger line = (SQInteger)l;
-        for (SQInteger i = 1; i < _nlineinfos && (SQInteger)o < op; i++) {
+        for (SQInteger i = 1; i <= _nlineinfos && (SQInteger)o < op; i++) {
             line = (SQInteger)l;
+            if (i == _nlineinfos) return line;
             l += DebugGet(p);
             o += DebugGet(p);
         }
-        if ((SQInteger)o < op) line = (SQInteger)l;
-        return line;
+        if ((SQInteger)o > op) return line;
     }
-    // A table out of order (rare): decoded whole, searched as upstream does.
+    // A table out of order (rare), or an entry at `op`: decoded whole, searched as the
+    // original's does (unlike 3.2's, it doesn't step back from an entry at `op`, so a
+    // call that ends a line can report the next one, as the original's stacks do).
     sqvector<SQLineInfo> infos;
     infos.resize(_nlineinfos);
     _debuginfo->Lines(&infos[0]);
@@ -424,8 +426,6 @@ SQInteger SQFunctionProto::GetLine(SQInstruction *curr)
             break;
         }
     }
-
-    while(mid > 0 && _lineinfos[mid]._op >= op) mid--;
 
     line = _lineinfos[mid]._line;
 
