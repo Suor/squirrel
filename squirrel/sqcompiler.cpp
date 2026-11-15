@@ -508,6 +508,10 @@ public:
             _es.etype = EXPR;
             break;
             }
+        // As the original's compiler (3.0.4): `in` and `instanceof` bind as loosely as `&&`,
+        // so `"b" in t == false` is `"b" in (t == false)`.
+        case TK_IN: BIN_EXP(_OP_EXISTS, &SQCompiler::BitwiseOrExp); break;
+        case TK_INSTANCEOF: BIN_EXP(_OP_INSTANCEOF, &SQCompiler::BitwiseOrExp); break;
 
         default:
             return;
@@ -552,8 +556,6 @@ public:
         case _SC('<'): BIN_EXP(_OP_CMP, &SQCompiler::ShiftExp,CMP_L); break;
         case TK_GE: BIN_EXP(_OP_CMP, &SQCompiler::ShiftExp,CMP_GE); break;
         case TK_LE: BIN_EXP(_OP_CMP, &SQCompiler::ShiftExp,CMP_LE); break;
-        case TK_IN: BIN_EXP(_OP_EXISTS, &SQCompiler::ShiftExp); break;
-        case TK_INSTANCEOF: BIN_EXP(_OP_INSTANCEOF, &SQCompiler::ShiftExp); break;
         default: return;
         }
     }
