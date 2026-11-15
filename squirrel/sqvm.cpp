@@ -320,7 +320,8 @@ bool SQVM::ToString(const SQObjectPtr &o,SQObjectPtr &res)
         scsprintf(_sp(sq_rsl(6)),sq_rsl(6),_integer(o)?_SC("true"):_SC("false"));
         break;
     case OT_NULL:
-        scsprintf(_sp(sq_rsl(5)),sq_rsl(5),_SC("null"));
+        // As the original's: an object's shape at address 0 (32-bit, as all its pointers).
+        scsprintf(_sp(sq_rsl(20)),sq_rsl(20),_SC("(null : 0x00000000)"));
         break;
     case OT_TABLE:
     case OT_USERDATA:
